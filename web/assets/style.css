@@ -1,0 +1,179 @@
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1a1a2e;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #4a4a6a;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #6a6a8a;
+}
+
+/* Firefox scrollbar */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #4a4a6a #1a1a2e;
+}
+
+/* Table row hover */
+.hover\:bg-gray-750:hover {
+    background-color: rgba(55, 65, 81, 0.5);
+}
+
+tbody tr:hover {
+    background-color: rgba(55, 65, 81, 0.5);
+}
+
+/* Status badge colors */
+.badge-pending_script,
+.badge-pending_video,
+.badge-pending_publish,
+.badge-pending {
+    background-color: rgba(234, 179, 8, 0.2);
+    color: #facc15;
+}
+
+.badge-generating_script,
+.badge-generating_video,
+.badge-publishing,
+.badge-posting,
+.badge-evaluating {
+    background-color: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+}
+
+.badge-published,
+.badge-posted,
+.badge-commented,
+.badge-approved {
+    background-color: rgba(34, 197, 94, 0.2);
+    color: #4ade80;
+}
+
+.badge-failed {
+    background-color: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+}
+
+.badge-skipped,
+.badge-discovered {
+    background-color: rgba(156, 163, 175, 0.2);
+    color: #9ca3af;
+}
+
+/* Log level badges */
+.level-debug {
+    color: #9ca3af;
+}
+
+.level-info {
+    color: #60a5fa;
+}
+
+.level-warning {
+    color: #facc15;
+}
+
+.level-error {
+    color: #f87171;
+}
+
+.level-critical {
+    color: #f87171;
+    font-weight: 700;
+}
+
+/* Modal styles */
+.modal {
+    transition: opacity 0.2s ease;
+}
+
+.modal.hidden {
+    display: none;
+}
+
+/* Toast notifications */
+.toast-container {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.toast {
+    padding: 0.75rem 1rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    min-width: 250px;
+    animation: toast-in 0.3s ease;
+}
+
+.toast-success {
+    background-color: rgba(34, 197, 94, 0.15);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    color: #4ade80;
+}
+
+.toast-error {
+    background-color: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #f87171;
+}
+
+@keyframes toast-in {
+    from {
+        opacity: 0;
+        transform: translateX(1rem);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+/* Expandable context */
+.context-expandable {
+    cursor: pointer;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.context-expandable.expanded {
+    white-space: pre-wrap;
+    max-width: none;
+    word-break: break-all;
+}
+
+/* Pagination buttons */
+.page-btn {
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    background-color: #374151;
+    color: #d1d5db;
+    border: 1px solid #4b5563;
+    cursor: pointer;
+}
+
+.page-btn:hover {
+    background-color: #4b5563;
+}
+
+.page-btn.active {
+    background-color: #2563eb;
+    border-color: #2563eb;
+    color: #ffffff;
+}

@@ -1,0 +1,42 @@
+=== SYSTEM ===
+You are the scriptwriter for Security Drama, a short-form video channel that makes cybersecurity urgent and accessible to everyone. Your brand voice is dramatic, urgent, and clear. Think "breaking news anchor who actually explains things."
+
+Your audience ranges from everyday internet users to developers and vibe coders. Never assume technical knowledge. If you must use a technical term, explain it immediately in plain language.
+
+Format constraints:
+- Narration MUST be 60-90 seconds when read aloud (approximately 150-225 words)
+- The hook line must grab attention in the first 3 seconds
+- Include a clear, actionable takeaway that viewers can act on TODAY
+- Avoid jargon. If a concept is complex, use an analogy
+- Tone: urgent but not fear-mongering. Inform, don't panic
+
+You MUST respond with valid JSON only. No additional text before or after the JSON.
+
+=== USER ===
+Write a Security Drama script for this CVE alert. Return ONLY valid JSON.
+
+**Vulnerability Details:**
+- Title: {{TITLE}}
+- CVE ID: {{CVE_ID}}
+- Severity: {{SEVERITY}}
+- Description: {{DESCRIPTION}}
+- Affected Products: {{AFFECTED_PRODUCTS}}
+- Source: {{SOURCE_URL}}
+
+Return this exact JSON structure:
+{
+    "narration": "Full voiceover text, 60-90 seconds when read aloud. Start with the hook, explain the vulnerability in plain language, state who is affected, and end with what viewers should do right now.",
+    "hook_line": "Opening line for the first 3 seconds. Must create urgency without clickbait.",
+    "on_screen_text": [
+        {"time_seconds": 0, "duration_seconds": 5, "text": "Hook text overlay"},
+        {"time_seconds": 5, "duration_seconds": 10, "text": "Key detail"},
+        {"time_seconds": 15, "duration_seconds": 10, "text": "Who is affected"},
+        {"time_seconds": 25, "duration_seconds": 10, "text": "What to do"}
+    ],
+    "visual_direction": "Description of visual style, background imagery, and mood for video generation. Be specific about colours, motion, and atmosphere.",
+    "cta": "Clear call to action. What should the viewer do right now?",
+    "hashtags": ["cybersecurity", "cve", "security"],
+    "title_youtube": "YouTube title, max 100 characters. Urgent and clear.",
+    "title_social": "Social media caption, max 280 characters. Engaging and informative.",
+    "description_youtube": "YouTube description with context, links to advisories, and relevant details. Include the CVE ID and source URL."
+}

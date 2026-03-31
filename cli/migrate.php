@@ -1,0 +1,244 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/../src/Bootstrap.php';
+
+use SecurityDrama\Bootstrap;
+use SecurityDrama\Config;
+use SecurityDrama\Database;
+
+Bootstrap::init();
+
+if (Config::getInstance()->get('pipeline_enabled', '1') === '0') {
+    echo "Pipeline is disabled. Set pipeline_enabled to 1 to resume.\n";
+    exit(0);
+}
+
+$lockFile = fopen('/tmp/securitydrama_migrate.lock', 'c');
+if (!flock($lockFile, LOCK_EX | LOCK_NB)) {
+    echo "Another migration process is already running.\n";
+    exit(1);
+}
+
+$db = Database::getInstance();
+
+$tables = [
+    'feed_sources' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS feed_sources (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            slug VARCHAR(50) NOT NULL UNIQUE,
+            category ENUM('cve','exploit','breach','news','vendor','scam','community') NOT NULL,
+            feed_type ENUM('rss','json_api','json_download','html_scrape') NOT NULL,
+            url VARCHAR(500) NOT NULL,
+            polling_interval_minutes INT UNSIGNED NOT NULL DEFAULT 360,
+            is_active TINYINT(1) NOT NULL DEFAULT 1,
+            last_polled_at DATETIME NULL,
+            last_successful_at DATETIME NULL,
+            last_error TEXT NULL,
+            items_fetched_total INT UNSIGNED NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_active_poll (is_active, last_polled_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
+    'feed_items' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS feed_items (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            source_id INT UNSIGNED NOT NULL,
+            external_id VARCHAR(100) NULL COMMENT 'CVE ID, advisory ID, or source-specific ID',
+            content_hash CHAR(64) NOT NULL COMMENT 'SHA-256 of title+description for dedup',
+            title VARCHAR(500) NOT NULL,
+            description TEXT NOT NULL,
+            url VARCHAR(1000) NULL,
+            severity ENUM('critical','high','medium','low','info','unknown') NOT NULL DEFAULT 'unknown',
+            cvss_score DECIMAL(3,1) NULL,
+            affected_products TEXT NULL COMMENT 'JSON array of product/ecosystem names',
+            raw_data MEDIUMTEXT NULL COMMENT 'Original JSON/XML for reference',
+            published_at DATETIME NULL,
+            ingested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            relevance_score DECIMAL(5,2) NULL COMMENT 'Calculated by scoring engine, 0-100',
+            audience_tags VARCHAR(200) NULL COMMENT 'Comma-separated: vibe_coder,smb,general',
+            is_processed TINYINT(1) NOT NULL DEFAULT 0,
+            FOREIGN KEY (source_id) REFERENCES feed_sources(id),
+            UNIQUE KEY uk_content_hash (content_hash),
+            INDEX idx_unprocessed (is_processed, relevance_score DESC),
+            INDEX idx_external_id (external_id),
+            INDEX idx_ingested (ingested_at),
+            INDEX idx_severity (severity, relevance_score DESC)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
+    'content_queue' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS content_queue (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            feed_item_id INT UNSIGNED NOT NULL,
+            content_type ENUM('cve_alert','scam_drama','security_101','vibe_roast','breach_story') NOT NULL,
+            target_audience ENUM('vibe_coder','smb','general') NOT NULL,
+            status ENUM('pending_script','generating_script','pending_video','generating_video','pending_publish','publishing','published','failed') NOT NULL DEFAULT 'pending_script',
+            priority INT UNSIGNED NOT NULL DEFAULT 50 COMMENT '1=highest, 100=lowest',
+            script_id INT UNSIGNED NULL,
+            video_id INT UNSIGNED NULL,
+            failure_reason TEXT NULL,
+            retry_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (feed_item_id) REFERENCES feed_items(id),
+            INDEX idx_status_priority (status, priority ASC, created_at ASC)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
+    'scripts' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS scripts (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            queue_id INT UNSIGNED NOT NULL,
+            narration_text TEXT NOT NULL COMMENT 'Full voiceover narration',
+            on_screen_text TEXT NULL COMMENT 'JSON array of timed text overlays',
+            visual_direction TEXT NULL COMMENT 'JSON scene descriptions for video gen',
+            hook_line VARCHAR(300) NOT NULL COMMENT 'First line / social media caption hook',
+            cta_text VARCHAR(500) NULL COMMENT 'Call to action text',
+            hashtags VARCHAR(300) NULL COMMENT 'Comma-separated hashtags',
+            estimated_duration_seconds INT UNSIGNED NULL,
+            llm_model VARCHAR(50) NOT NULL,
+            llm_prompt_tokens INT UNSIGNED NULL,
+            llm_completion_tokens INT UNSIGNED NULL,
+            llm_cost_usd DECIMAL(6,4) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (queue_id) REFERENCES content_queue(id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
+    'videos' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS videos (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            queue_id INT UNSIGNED NOT NULL,
+            script_id INT UNSIGNED NOT NULL,
+            provider VARCHAR(30) NOT NULL COMMENT 'heygen, synthesia, etc',
+            provider_video_id VARCHAR(100) NULL COMMENT 'ID from the video provider',
+            provider_status VARCHAR(30) NULL,
+            storage_path VARCHAR(500) NULL COMMENT 'Path in DO Spaces',
+            storage_url VARCHAR(1000) NULL COMMENT 'Full CDN URL',
+            thumbnail_path VARCHAR(500) NULL,
+            thumbnail_url VARCHAR(1000) NULL,
+            duration_seconds INT UNSIGNED NULL,
+            file_size_bytes BIGINT UNSIGNED NULL,
+            resolution VARCHAR(20) NULL COMMENT '1080x1920, 1920x1080, etc',
+            aspect_ratio ENUM('9:16','16:9','1:1') NOT NULL DEFAULT '9:16',
+            provider_cost_credits DECIMAL(8,2) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at DATETIME NULL,
+            FOREIGN KEY (queue_id) REFERENCES content_queue(id),
+            FOREIGN KEY (script_id) REFERENCES scripts(id),
+            INDEX idx_provider_status (provider, provider_status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
+    'social_posts' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS social_posts (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            video_id INT UNSIGNED NOT NULL,
+            platform ENUM('youtube','x','reddit','instagram','facebook','tiktok','linkedin','threads','bluesky','mastodon','pinterest') NOT NULL,
+            adapter VARCHAR(30) NOT NULL COMMENT 'Which adapter was used: direct, missinglettr',
+            status ENUM('pending','posting','posted','failed') NOT NULL DEFAULT 'pending',
+            platform_post_id VARCHAR(200) NULL COMMENT 'Post/video ID returned by platform',
+            platform_url VARCHAR(1000) NULL COMMENT 'Direct URL to the post',
+            title VARCHAR(300) NULL,
+            description TEXT NULL,
+            failure_reason TEXT NULL,
+            retry_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
+            posted_at DATETIME NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (video_id) REFERENCES videos(id),
+            UNIQUE KEY uk_video_platform (video_id, platform),
+            INDEX idx_status (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
+    'platform_config' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS platform_config (
+            platform VARCHAR(20) PRIMARY KEY,
+            is_enabled TINYINT(1) NOT NULL DEFAULT 0,
+            adapter ENUM('direct','missinglettr','disabled') NOT NULL DEFAULT 'disabled',
+            post_type ENUM('native_video','link_to_youtube','text_with_link') NOT NULL DEFAULT 'native_video' COMMENT 'How to post: upload video natively, link to YT, or text+link',
+            platform_config_json TEXT NULL COMMENT 'Platform-specific config as JSON (e.g. subreddits for Reddit)',
+            max_daily_posts INT UNSIGNED NOT NULL DEFAULT 10,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
+    'config' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS config (
+            config_key VARCHAR(100) PRIMARY KEY,
+            config_value TEXT NOT NULL,
+            description VARCHAR(300) NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
+    'pipeline_log' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS pipeline_log (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            module VARCHAR(30) NOT NULL COMMENT 'ingest, score, script, video, publish',
+            level ENUM('debug','info','warning','error','critical') NOT NULL,
+            message TEXT NOT NULL,
+            context TEXT NULL COMMENT 'JSON with additional context',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_module_level (module, level, created_at DESC),
+            INDEX idx_created (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
+    'reddit_watch_keywords' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS reddit_watch_keywords (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            keyword VARCHAR(100) NOT NULL,
+            keyword_type ENUM('package','cve','topic','technology') NOT NULL,
+            is_active TINYINT(1) NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_keyword (keyword)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
+    'reddit_threads' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS reddit_threads (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            reddit_post_id VARCHAR(20) NOT NULL COMMENT 'Reddit fullname e.g. t3_abc123',
+            subreddit VARCHAR(50) NOT NULL,
+            title VARCHAR(500) NOT NULL,
+            post_body TEXT NULL,
+            author VARCHAR(50) NOT NULL,
+            permalink VARCHAR(500) NOT NULL,
+            upvotes INT NOT NULL DEFAULT 0,
+            comment_count INT NOT NULL DEFAULT 0,
+            matched_keywords TEXT NOT NULL COMMENT 'JSON array of keywords that matched',
+            matched_video_id INT UNSIGNED NULL COMMENT 'Our video that is relevant',
+            status ENUM('discovered','evaluating','approved','commented','skipped','failed') NOT NULL DEFAULT 'discovered',
+            skip_reason VARCHAR(200) NULL,
+            comment_text TEXT NULL COMMENT 'The generated comment text',
+            reddit_comment_id VARCHAR(20) NULL COMMENT 'Our comment ID after posting',
+            discovered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            commented_at DATETIME NULL,
+            UNIQUE KEY uk_reddit_post (reddit_post_id),
+            FOREIGN KEY (matched_video_id) REFERENCES videos(id),
+            INDEX idx_status (status, discovered_at DESC),
+            INDEX idx_subreddit (subreddit, discovered_at DESC)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+];
+
+$created = 0;
+$errors = 0;
+
+foreach ($tables as $name => $sql) {
+    try {
+        $db->execute($sql);
+        echo "  [OK] {$name}\n";
+        $created++;
+    } catch (\PDOException $e) {
+        echo "  [FAIL] {$name}: {$e->getMessage()}\n";
+        $errors++;
+    }
+}
+
+echo "\nMigration complete. Tables: {$created} OK, {$errors} errors.\n";

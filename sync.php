@@ -752,13 +752,21 @@ function smokeTest(array $config, ?string $expectedGitSha): void
     }
     success('In-process validate OK.');
 
-    // HTTP: served through Apache, run locally on the server to bypass TLS.
-    $out = sshExec($config, 'curl -fsS http://localhost/health.php', true);
+    // HTTPS: hit the public FQDN. Apache redirects HTTP→HTTPS, so curling
+    // localhost over plain HTTP just lands on a 301. Hitting the real domain
+    // also exercises the TLS cert and vhost config — both things we actually
+    // want a smoke test to cover.
+    $domain = $config['domain'] ?? '';
+    if ($domain === '') {
+        throw new RuntimeException('Config is missing "domain" — required for HTTPS smoke test.');
+    }
+    $url = "https://{$domain}/health.php";
+    $out = sshExec($config, 'curl -fsS ' . escapeshellarg($url), true);
     $decoded = json_decode($out, true);
     if (!is_array($decoded) || ($decoded['status'] ?? '') !== 'ok') {
-        throw new RuntimeException("health.php did not return ok:\n" . trim($out));
+        throw new RuntimeException("health.php at {$url} did not return ok:\n" . trim($out));
     }
-    success('HTTP health check OK.');
+    success("HTTPS health check OK ({$url}).");
 
     if ($expectedGitSha !== null) {
         $reported = trim((string) ($decoded['git_sha'] ?? ''));

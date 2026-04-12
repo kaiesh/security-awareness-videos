@@ -19,6 +19,15 @@ final class Bootstrap
         self::$isCli = PHP_SAPI === 'cli';
         self::$basePath = $basePath ?? dirname(__DIR__);
 
+        // CLI scripts run batch work — feed ingestion, video generation, scoring
+        // — over potentially large datasets (PhishTank's online-valid.json is
+        // tens of thousands of entries). The PHP default of 128M is too small.
+        // Web requests stay on the php.ini default to keep per-request memory
+        // bounded.
+        if (self::$isCli) {
+            ini_set('memory_limit', '512M');
+        }
+
         self::loadEnv();
         self::loadComposerAutoload();
         self::registerAutoloader();

@@ -703,8 +703,12 @@ function runComposer(array $config): void
 
 function runMigrate(array $config): void
 {
+    // migrate.php must run as root: it uses MySQL auth_socket for DDL because
+    // the runtime app user (securitydrama) is intentionally restricted to
+    // SELECT/INSERT/UPDATE/DELETE only. Connecting as root via the unix socket
+    // is the same auth path deploy.php uses for its initial bootstrap.
     $cmd = 'cd ' . escapeshellarg($config['app_dir']) . ' && php cli/migrate.php';
-    $code = sshSudoAsStream($config, 'www-data', $cmd);
+    $code = sshSudoStream($config, $cmd);
     if ($code !== 0) {
         throw new RuntimeException("migrate.php exited with code {$code}");
     }

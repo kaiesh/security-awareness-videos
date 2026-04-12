@@ -311,8 +311,9 @@ rsync -avz --exclude=".git" --exclude="vendor" --exclude=".env" \
 # On the server, if composer.json changed:
 sudo -u www-data bash -c 'cd /var/www/securitydrama && HOME=/tmp/securitydrama composer install --no-dev --optimize-autoloader'
 
-# If migrations changed:
-sudo -u www-data php /var/www/securitydrama/cli/migrate.php
+# If migrations changed (must run as root — uses MySQL auth_socket for DDL,
+# because the runtime app user has no CREATE/ALTER privileges by design):
+sudo php /var/www/securitydrama/cli/migrate.php
 ```
 
 Remember to set `pipeline_enabled=0` in the admin dashboard first and back to `1` after, so the cron pipeline doesn't run against half-updated code.

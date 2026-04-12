@@ -5,12 +5,23 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/Bootstrap.php';
 
 use SecurityDrama\Bootstrap;
-use SecurityDrama\Database;
 
 Bootstrap::init();
 
 // Administrative tool — intentionally NOT gated by pipeline_enabled.
 // sync.php calls this while the kill switch is engaged.
+//
+// DDL requires CREATE/ALTER privileges which the runtime app user
+// (securitydrama) does not have by design — least privilege keeps a SQL
+// injection from being able to DROP TABLE. So this script connects as
+// MySQL root via the unix socket (auth_socket), which requires running as
+// OS root. Same auth path deploy.php uses for its initial mysql bootstrap.
+
+if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+    fwrite(STDERR, "migrate.php must run as root (uses MySQL auth_socket for DDL).\n");
+    fwrite(STDERR, "Try: sudo php cli/migrate.php\n");
+    exit(1);
+}
 
 $lockFile = fopen('/tmp/securitydrama_migrate.lock', 'c');
 if (!flock($lockFile, LOCK_EX | LOCK_NB)) {
@@ -18,7 +29,24 @@ if (!flock($lockFile, LOCK_EX | LOCK_NB)) {
     exit(1);
 }
 
-$db = Database::getInstance();
+$dbName = $_ENV['DB_NAME'] ?? 'securitydrama';
+$socket = $_ENV['DB_SOCKET'] ?? '/var/run/mysqld/mysqld.sock';
+
+try {
+    $db = new PDO(
+        "mysql:unix_socket={$socket};dbname={$dbName};charset=utf8mb4",
+        'root',
+        '',
+        [
+            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES   => false,
+        ]
+    );
+} catch (\PDOException $e) {
+    fwrite(STDERR, "Could not connect to MySQL as root via {$socket}: " . $e->getMessage() . "\n");
+    exit(1);
+}
 
 $tables = [
     'feed_sources' => <<<'SQL'
@@ -229,7 +257,7 @@ $errors = 0;
 
 foreach ($tables as $name => $sql) {
     try {
-        $db->execute($sql);
+        $db->exec($sql);
         echo "  [OK] {$name}\n";
         $created++;
     } catch (\PDOException $e) {
@@ -239,3 +267,4 @@ foreach ($tables as $name => $sql) {
 }
 
 echo "\nMigration complete. Tables: {$created} OK, {$errors} errors.\n";
+exit($errors > 0 ? 1 : 0);

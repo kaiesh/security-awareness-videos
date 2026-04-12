@@ -20,6 +20,7 @@ final class Bootstrap
         self::$basePath = $basePath ?? dirname(__DIR__);
 
         self::loadEnv();
+        self::loadComposerAutoload();
         self::registerAutoloader();
 
         Database::getInstance();
@@ -70,6 +71,23 @@ final class Bootstrap
 
             $_ENV[$key] = $value;
             putenv("{$key}={$value}");
+        }
+    }
+
+    /**
+     * Load Composer's autoloader so third-party namespaces (Aws\, GuzzleHttp\,
+     * Psr\, ...) resolve. The custom registerAutoloader() below only knows
+     * about SecurityDrama\, so without this every Storage instantiation would
+     * crash with "Class Aws\S3\S3Client not found".
+     *
+     * Conditional so local checkouts without `composer install` still work
+     * for code that doesn't touch vendor classes.
+     */
+    private static function loadComposerAutoload(): void
+    {
+        $autoload = self::$basePath . '/vendor/autoload.php';
+        if (file_exists($autoload)) {
+            require_once $autoload;
         }
     }
 

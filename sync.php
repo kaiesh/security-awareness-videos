@@ -480,29 +480,56 @@ function releaseSentinel(array $config): void
 
 function engageKillSwitch(array $config): void
 {
-    $out = sshSudoAs(
-        $config,
-        'www-data',
-        'cd ' . escapeshellarg($config['app_dir']) . ' && php cli/kill-switch.php off'
-    );
-    if (strpos($out, 'pipeline_enabled=0') === false) {
-        throw new RuntimeException("Kill switch command did not confirm off state:\n" . $out);
-    }
+    setKillSwitch($config, '0');
     success('Kill switch engaged (pipeline_enabled=0).');
 }
 
 function releaseKillSwitch(array $config): void
 {
-    $out = sshSudoAs(
+    setKillSwitch($config, '1');
+    success('Kill switch released (pipeline_enabled=1).');
+}
+
+/**
+ * Flip pipeline_enabled via direct MySQL access. Goes through `sudo mysql`
+ * (auth_socket), the same mechanism deploy.php uses for DDL. Deliberately
+ * does NOT call cli/kill-switch.php — that file may not exist on the server
+ * yet during the sync that introduces it (chicken-and-egg), and we want the
+ * kill switch engaged *before* we rsync new code.
+ */
+function setKillSwitch(array $config, string $value): void
+{
+    // We can't easily discover the DB name from sync.php (it lives in .env,
+    // which is chmod 600 www-data). Grepping .env as www-data is the cleanest
+    // option and preserves the "no DB name in sync config" design.
+    $db = trim(sshSudoAs(
         $config,
         'www-data',
-        'cd ' . escapeshellarg($config['app_dir']) . ' && php cli/kill-switch.php on'
-    );
-    if (strpos($out, 'pipeline_enabled=1') === false) {
-        warn("Kill switch command did not confirm on state:\n" . $out);
-        return;
+        "grep -E '^DB_NAME=' " . escapeshellarg(rtrim($config['app_dir'], '/') . '/.env') . " | cut -d= -f2-"
+    ));
+    $db = trim($db, "\"' \t\n\r");
+    if ($db === '') {
+        throw new RuntimeException('Could not read DB_NAME from remote .env — is the app deployed?');
     }
-    success('Kill switch released (pipeline_enabled=1).');
+
+    $sql = "UPDATE config SET config_value='" . $value . "' WHERE config_key='pipeline_enabled'";
+    sshSudo(
+        $config,
+        'mysql ' . escapeshellarg($db) . ' -e ' . escapeshellarg($sql),
+        true
+    );
+
+    // Verify the write landed.
+    $check = sshSudo(
+        $config,
+        'mysql ' . escapeshellarg($db) . " -N -e \"SELECT config_value FROM config WHERE config_key='pipeline_enabled'\"",
+        true
+    );
+    if (trim($check) !== $value) {
+        throw new RuntimeException(
+            "Kill switch did not take effect (wanted {$value}, got '" . trim($check) . "')"
+        );
+    }
 }
 
 function waitForPipelineToFinish(array $config): void

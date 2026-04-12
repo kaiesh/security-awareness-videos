@@ -332,7 +332,19 @@ success(".env file written.");
 info("Installing Composer dependencies...");
 // Must run as www-data so Composer's cache/temp goes to www-data's home and
 // vendor/ ends up owned correctly. www-data can read .env (which it owns).
-sshSudoAsStream($config, 'www-data', 'cd /var/www/securitydrama && HOME=/tmp/securitydrama composer install --no-dev --optimize-autoloader 2>&1 | tail -10');
+// Do NOT pipe through tail — a pipe's exit code is the tail's, so any
+// composer failure would silently look like success and ship a broken vendor/.
+$composerCode = sshSudoAsStream(
+    $config,
+    'www-data',
+    'cd /var/www/securitydrama && HOME=/tmp/securitydrama composer install --no-dev --optimize-autoloader'
+);
+if ($composerCode !== 0) {
+    error("composer install failed with exit code {$composerCode}.");
+    error("Re-run manually to inspect the full output:");
+    error("  sudo -u www-data bash -c 'cd /var/www/securitydrama && HOME=/tmp/securitydrama composer install --no-dev --optimize-autoloader'");
+    exit(1);
+}
 success("Composer dependencies installed.");
 
 // ─── Configure MySQL ───

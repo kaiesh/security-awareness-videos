@@ -211,24 +211,48 @@ function runSync(string $cfgPath, bool $dryRun): void
         pruneSnapshots($config);
     } catch (\Throwable $e) {
         error('Sync failed: ' . $e->getMessage());
-        warn('Attempting rollback to snapshot: ' . ($snapshotName ?? '<none>'));
-        try {
-            if ($snapshotName !== null) {
+
+        $rollbackOk = false;
+        if ($snapshotName !== null) {
+            warn("Attempting rollback to snapshot: {$snapshotName}");
+            try {
                 rollbackTo($config, $snapshotName);
-                smokeTest($config, null);
-                success('Rollback complete — server is back on the previous release.');
-                if ($killSwitchEngaged) {
-                    releaseKillSwitch($config);
-                    $killSwitchEngaged = false;
-                }
-            } else {
-                warn('No snapshot was taken — nothing to roll back to.');
+                $rollbackOk = true;
+            } catch (\Throwable $rb) {
+                error('ROLLBACK FAILED: ' . $rb->getMessage());
+                error('Snapshot still available at: ' . $config['snapshot_dir'] . '/' . $snapshotName);
             }
-        } catch (\Throwable $rb) {
-            error('ROLLBACK FAILED: ' . $rb->getMessage());
-            error('The server is in a broken state. Manual intervention required.');
-            error('Snapshot still available at: ' . ($snapshotName ? $config['snapshot_dir'] . '/' . $snapshotName : '<none>'));
+        } else {
+            warn('No snapshot was taken — nothing to roll back to.');
         }
+
+        // Always try to release the kill switch — leaving it engaged silently
+        // pauses the live pipeline, which is the worst end state.
+        if ($killSwitchEngaged) {
+            try {
+                releaseKillSwitch($config);
+                $killSwitchEngaged = false;
+            } catch (\Throwable $ks) {
+                error('Failed to release kill switch: ' . $ks->getMessage());
+                error("Set pipeline_enabled=1 manually: sudo mysql <db> -e \"UPDATE config SET config_value='1' WHERE config_key='pipeline_enabled'\"");
+            }
+        }
+
+        // Snapshot-agnostic check: the rolled-back code may predate validate-only
+        // or health.php (e.g. first sync after deploy). Just confirm the server
+        // is reachable and the DB responds.
+        if ($rollbackOk) {
+            try {
+                smokeTestMinimal($config);
+                success('Rollback complete — server is back on the previous release.');
+            } catch (\Throwable $sm) {
+                error('Post-rollback minimal smoke test failed: ' . $sm->getMessage());
+                error('The server is in a broken state. Manual intervention required.');
+            }
+        } else {
+            error('The server is in a broken state. Manual intervention required.');
+        }
+
         releaseSentinel($config);
         throw $e;
     }
@@ -281,7 +305,9 @@ function runRollback(string $cfgPath): void
         waitForPipelineToFinish($config);
 
         rollbackTo($config, $snapshotName);
-        smokeTest($config, null);
+        // The picked snapshot may predate the smoke-test infrastructure
+        // (validate-only / health.php). Use the snapshot-agnostic check.
+        smokeTestMinimal($config);
 
         releaseKillSwitch($config);
         $killSwitchEngaged = false;
@@ -739,6 +765,44 @@ function smokeTest(array $config, ?string $expectedGitSha): void
         }
         success("VERSION file reports git SHA {$expectedGitSha}.");
     }
+}
+
+/**
+ * Snapshot-agnostic smoke test, used after a rollback. The previous release
+ * may not contain --validate-only or web/health.php (e.g. the very first sync
+ * after deploy). All we check is that the server is reachable, MySQL is up,
+ * and Apache is serving requests.
+ */
+function smokeTestMinimal(array $config): void
+{
+    // 1. MySQL responds via auth_socket (same path used by setKillSwitch).
+    $db = trim(sshSudoAs(
+        $config,
+        'www-data',
+        "grep -E '^DB_NAME=' " . escapeshellarg(rtrim($config['app_dir'], '/') . '/.env') . " | cut -d= -f2-"
+    ));
+    $db = trim($db, "\"' \t\n\r");
+    if ($db === '') {
+        throw new RuntimeException('Could not read DB_NAME from remote .env.');
+    }
+    $out = sshSudo($config, 'mysql ' . escapeshellarg($db) . ' -N -e "SELECT 1"', true);
+    if (trim($out) !== '1') {
+        throw new RuntimeException("MySQL SELECT 1 returned: " . trim($out));
+    }
+    success('MySQL responds.');
+
+    // 2. Apache is serving requests. The admin path is basic-auth protected,
+    // so a 401 is success here — it proves Apache + PHP-FPM are alive without
+    // requiring health.php to exist on the rolled-back tree.
+    $code = trim(sshExec(
+        $config,
+        "curl -s -o /dev/null -w '%{http_code}' http://localhost/",
+        true
+    ));
+    if (!in_array($code, ['200', '301', '302', '401', '403'], true)) {
+        throw new RuntimeException("Apache returned unexpected status: {$code}");
+    }
+    success("Apache responds (HTTP {$code}).");
 }
 
 // ══════════════════════════════════════════════

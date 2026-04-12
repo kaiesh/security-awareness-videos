@@ -24,8 +24,11 @@ $nonStubAdapters = ['youtube'];
                 </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Video Provider</label>
-                    <input type="text" id="cfg-video_provider" readonly
-                           class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-gray-400">
+                    <select id="cfg-video_provider" onchange="toggleProviderSections()"
+                            class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-gray-100">
+                        <option value="heygen">HeyGen (Avatar presenter)</option>
+                        <option value="seedance">Seedance 2.0 (Cinematic AI)</option>
+                    </select>
                 </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Min Relevance Score (0-100)</label>
@@ -76,6 +79,34 @@ $nonStubAdapters = ['youtube'];
             </div>
             <button onclick="saveHeygenConfig()" class="px-4 py-2 bg-blue-700 hover:bg-blue-600 rounded text-sm font-medium">
                 Save HeyGen Settings
+            </button>
+        </div>
+    </div>
+
+    <!-- Seedance settings -->
+    <div class="bg-gray-800 rounded-lg border border-gray-700 mb-6" id="seedance-settings-section">
+        <div class="px-4 py-3 border-b border-gray-700">
+            <h3 class="text-lg font-semibold">Seedance Settings</h3>
+            <p class="text-xs text-gray-500 mt-1">Seedance 2.0 via fal.ai — cinematic AI video generation</p>
+        </div>
+        <div class="p-4 space-y-4" id="config-seedance-form">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Resolution</label>
+                    <select id="cfg-seedance_resolution"
+                            class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-gray-100">
+                        <option value="480p">480p</option>
+                        <option value="720p">720p</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Duration (seconds, 4-15)</label>
+                    <input type="number" id="cfg-seedance_duration" min="4" max="15"
+                           class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-gray-100">
+                </div>
+            </div>
+            <button onclick="saveSeedanceConfig()" class="px-4 py-2 bg-blue-700 hover:bg-blue-600 rounded text-sm font-medium">
+                Save Seedance Settings
             </button>
         </div>
     </div>

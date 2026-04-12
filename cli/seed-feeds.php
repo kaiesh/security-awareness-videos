@@ -5,15 +5,12 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/Bootstrap.php';
 
 use SecurityDrama\Bootstrap;
-use SecurityDrama\Config;
 use SecurityDrama\Database;
 
 Bootstrap::init();
 
-if (Config::getInstance()->get('pipeline_enabled', '1') === '0') {
-    echo "Pipeline is disabled. Set pipeline_enabled to 1 to resume.\n";
-    exit(0);
-}
+// Administrative tool — intentionally NOT gated by pipeline_enabled.
+// sync.php calls this while the kill switch is engaged.
 
 $lockFile = fopen('/tmp/securitydrama_seed_feeds.lock', 'c');
 if (!flock($lockFile, LOCK_EX | LOCK_NB)) {
@@ -107,6 +104,8 @@ $configDefaults = [
     ['heygen_template_id',             '',        'HeyGen template ID'],
     ['heygen_avatar_id',               '',        'Fallback avatar ID'],
     ['heygen_voice_id',                '',        'Fallback voice ID'],
+    ['seedance_resolution',            '720p',    'Seedance video resolution (480p, 720p)'],
+    ['seedance_duration',              '10',      'Seedance video duration in seconds (4-15)'],
     ['min_relevance_score',            '40',      'Min score for selection'],
     ['max_retry_count',                '3',       'Max retries for failures'],
     ['video_poll_interval_seconds',    '60',      'Video status check interval'],

@@ -27,183 +27,7 @@ if (version_compare(PHP_VERSION, '8.0.0', '<')) {
     die("PHP 8.0+ required to run this deploy script.\n");
 }
 
-// ──────────────────────────────────────────────
-// Helper functions
-// ──────────────────────────────────────────────
-
-function out(string $msg): void
-{
-    echo $msg;
-}
-
-function info(string $msg): void
-{
-    echo "\033[34m[INFO]\033[0m $msg\n";
-}
-
-function success(string $msg): void
-{
-    echo "\033[32m[OK]\033[0m $msg\n";
-}
-
-function warn(string $msg): void
-{
-    echo "\033[33m[WARN]\033[0m $msg\n";
-}
-
-function error(string $msg): void
-{
-    echo "\033[31m[ERROR]\033[0m $msg\n";
-}
-
-function banner(string $msg): void
-{
-    $len = strlen($msg) + 4;
-    $border = str_repeat('═', $len);
-    echo "\n\033[36m╔{$border}╗\033[0m\n";
-    echo "\033[36m║\033[0m  $msg  \033[36m║\033[0m\n";
-    echo "\033[36m╚{$border}╝\033[0m\n\n";
-}
-
-function prompt(string $question, string $default = '', bool $required = true, bool $secret = false): string
-{
-    $defaultDisplay = $default !== '' ? " [\033[33m{$default}\033[0m]" : '';
-    $requiredDisplay = $required && $default === '' ? ' \033[31m(required)\033[0m' : '';
-
-    out("  {$question}{$defaultDisplay}{$requiredDisplay}: ");
-
-    if ($secret) {
-        system('stty -echo 2>/dev/null');
-        $value = trim(fgets(STDIN));
-        system('stty echo 2>/dev/null');
-        echo "\n";
-    } else {
-        $value = trim(fgets(STDIN));
-    }
-
-    if ($value === '' && $default !== '') {
-        return $default;
-    }
-
-    if ($value === '' && $required) {
-        error("This field is required.");
-        return prompt($question, $default, $required, $secret);
-    }
-
-    return $value;
-}
-
-function confirm(string $question, bool $default = true): bool
-{
-    $hint = $default ? 'Y/n' : 'y/N';
-    out("  {$question} [{$hint}]: ");
-    $answer = strtolower(trim(fgets(STDIN)));
-
-    if ($answer === '') {
-        return $default;
-    }
-    return in_array($answer, ['y', 'yes']);
-}
-
-function sshExec(array $config, string $command, bool $silent = false): string
-{
-    $port = $config['ssh_port'];
-    $user = $config['ssh_user'];
-    $host = $config['server_ip'];
-    $keyFlag = isset($config['ssh_key']) && $config['ssh_key'] !== ''
-        ? "-i " . escapeshellarg($config['ssh_key'])
-        : '';
-
-    $sshCmd = sprintf(
-        'ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p %s %s %s@%s %s 2>&1',
-        escapeshellarg($port),
-        $keyFlag,
-        escapeshellarg($user),
-        escapeshellarg($host),
-        escapeshellarg($command)
-    );
-
-    if (!$silent) {
-        info("Running: $command");
-    }
-
-    $output = shell_exec($sshCmd);
-    return $output ?? '';
-}
-
-function sshExecStream(array $config, string $command): int
-{
-    $port = $config['ssh_port'];
-    $user = $config['ssh_user'];
-    $host = $config['server_ip'];
-    $keyFlag = isset($config['ssh_key']) && $config['ssh_key'] !== ''
-        ? "-i " . escapeshellarg($config['ssh_key'])
-        : '';
-
-    $sshCmd = sprintf(
-        'ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p %s %s %s@%s %s 2>&1',
-        escapeshellarg($port),
-        $keyFlag,
-        escapeshellarg($user),
-        escapeshellarg($host),
-        escapeshellarg($command)
-    );
-
-    passthru($sshCmd, $exitCode);
-    return $exitCode;
-}
-
-function scpUpload(array $config, string $localPath, string $remotePath): bool
-{
-    $port = $config['ssh_port'];
-    $user = $config['ssh_user'];
-    $host = $config['server_ip'];
-    $keyFlag = isset($config['ssh_key']) && $config['ssh_key'] !== ''
-        ? "-i " . escapeshellarg($config['ssh_key'])
-        : '';
-
-    $cmd = sprintf(
-        'scp -o StrictHostKeyChecking=no -P %s %s -r %s %s@%s:%s 2>&1',
-        escapeshellarg($port),
-        $keyFlag,
-        escapeshellarg($localPath),
-        escapeshellarg($user),
-        escapeshellarg($host),
-        escapeshellarg($remotePath)
-    );
-
-    $output = shell_exec($cmd);
-    return $output !== null;
-}
-
-function rsyncUpload(array $config, string $localPath, string $remotePath): bool
-{
-    $port = $config['ssh_port'];
-    $user = $config['ssh_user'];
-    $host = $config['server_ip'];
-    $keyFlag = isset($config['ssh_key']) && $config['ssh_key'] !== ''
-        ? "-i " . escapeshellarg($config['ssh_key'])
-        : '';
-
-    $sshOpt = sprintf(
-        'ssh -o StrictHostKeyChecking=no -p %s %s',
-        escapeshellarg($port),
-        $keyFlag
-    );
-
-    $cmd = sprintf(
-        'rsync -avz --exclude=".git" --exclude="vendor" --exclude=".env" --exclude="*.log" --exclude="security-drama-technical-spec.md" --exclude="deploy.php" -e %s %s %s@%s:%s 2>&1',
-        escapeshellarg($sshOpt),
-        escapeshellarg(rtrim($localPath, '/') . '/'),
-        escapeshellarg($user),
-        escapeshellarg($host),
-        escapeshellarg($remotePath)
-    );
-
-    info("Uploading application code...");
-    passthru($cmd, $exitCode);
-    return $exitCode === 0;
-}
+require_once __DIR__ . '/deploy-lib.php';
 
 // ──────────────────────────────────────────────
 // Main deployment flow
@@ -226,11 +50,21 @@ banner('Step 1: Server Connection');
 
 $config = [];
 $config['server_ip'] = prompt('Server IP address');
-$config['ssh_user'] = prompt('SSH username', 'root');
+$config['ssh_user'] = prompt('SSH username (non-root sudoer recommended)', 'deploy');
 $config['ssh_port'] = prompt('SSH port', '22');
 $config['ssh_key'] = prompt('SSH private key path (leave empty for default)', '', false);
 $config['domain'] = prompt('Admin dashboard domain (e.g., admin.securitydrama.com)');
 $config['new_ssh_port'] = prompt('New SSH port for hardening (leave empty to keep current)', '', false);
+
+// Sudo password — only relevant for non-root SSH users.
+$config['sudo_pass'] = '';
+if ($config['ssh_user'] !== 'root') {
+    echo "\n";
+    echo "  The SSH user '{$config['ssh_user']}' is not root. The script will use sudo for\n";
+    echo "  privileged operations. If you have passwordless sudo (NOPASSWD) configured for\n";
+    echo "  this user, leave the password blank. Otherwise enter your sudo password.\n\n";
+    $config['sudo_pass'] = prompt('Sudo password (leave empty for NOPASSWD)', '', false, true);
+}
 
 // Test SSH connection
 info("Testing SSH connection...");
@@ -242,6 +76,23 @@ if (strpos($testOutput, 'SSH_OK') === false) {
 }
 success("SSH connection successful.");
 
+// Test sudo access before doing anything that needs it.
+if ($config['ssh_user'] !== 'root') {
+    info("Testing sudo access...");
+    if (!sshSudoProbe($config)) {
+        error("sudo access check failed.");
+        error("The SSH user '{$config['ssh_user']}' must be able to run sudo.");
+        error("");
+        error("To enable passwordless sudo, run on the server as root:");
+        error("  echo '{$config['ssh_user']} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/{$config['ssh_user']}");
+        error("  chmod 440 /etc/sudoers.d/{$config['ssh_user']}");
+        error("");
+        error("Or re-run this script and enter the sudo password when prompted.");
+        exit(1);
+    }
+    success("Sudo access confirmed.");
+}
+
 // ─── Step 2: Database credentials ───
 
 banner('Step 2: Database Configuration');
@@ -249,7 +100,10 @@ banner('Step 2: Database Configuration');
 $config['db_name'] = prompt('MySQL database name', 'securitydrama');
 $config['db_user'] = prompt('MySQL application username', 'securitydrama');
 $config['db_pass'] = prompt('MySQL application password (will be created)', '', true, true);
-$config['db_root_pass'] = prompt('MySQL root password (will be set)', '', true, true);
+// Note: we intentionally don't prompt for a MySQL root password. Ubuntu 24.04's
+// MySQL uses auth_socket for root, so we invoke `sudo mysql` for admin DDL —
+// no password is ever stored or transmitted. The application connects only
+// as the dedicated $db_user with minimal privileges.
 
 // ─── Step 3: API keys ───
 
@@ -260,6 +114,7 @@ echo "Leave optional keys empty if not yet available.\n\n";
 
 $config['anthropic_api_key'] = prompt('Anthropic (Claude) API key', '', true, true);
 $config['heygen_api_key'] = prompt('HeyGen API key', '', false, true);
+$config['fal_api_key'] = prompt('fal.ai API key (for Seedance video generation)', '', false, true);
 
 echo "\n";
 $config['missinglettr_api_key'] = prompt('Missinglettr API key', '', false, true);
@@ -325,6 +180,7 @@ echo "  Claude API: " . (strlen($config['anthropic_api_key']) > 8
     ? substr($config['anthropic_api_key'], 0, 4) . '****' . substr($config['anthropic_api_key'], -4)
     : '(set)') . "\n";
 echo "  HeyGen:     " . ($config['heygen_api_key'] ? 'configured' : 'not set') . "\n";
+echo "  Seedance:   " . ($config['fal_api_key'] ? 'configured' : 'not set') . "\n";
 echo "  Missinglettr: " . ($config['missinglettr_api_key'] ? 'configured' : 'not set') . "\n";
 echo "  DO Spaces:  " . ($config['do_spaces_key'] ? 'configured' : 'not set') . "\n";
 echo "  YouTube:    " . ($config['youtube_client_id'] ? 'configured' : 'not set') . "\n";
@@ -345,19 +201,19 @@ banner('Deploying Security Drama');
 // ─── Install system packages ───
 
 info("Installing system packages (PHP 8.3, MySQL 8, Apache, etc.)...");
-sshExecStream($config, 'export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq software-properties-common 2>&1 | tail -5');
+sshSudoStream($config, 'export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq software-properties-common 2>&1 | tail -5');
 
-sshExecStream($config, 'export DEBIAN_FRONTEND=noninteractive && add-apt-repository -y ppa:ondrej/php 2>&1 | tail -3');
+sshSudoStream($config, 'export DEBIAN_FRONTEND=noninteractive && add-apt-repository -y ppa:ondrej/php 2>&1 | tail -3');
 
-sshExecStream($config, 'export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq \
+sshSudoStream($config, 'export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq \
     php8.3 php8.3-cli php8.3-mysql php8.3-curl php8.3-xml php8.3-mbstring php8.3-zip php8.3-gd php8.3-intl \
     libapache2-mod-php8.3 \
-    apache2 \
+    apache2 apache2-utils \
     mysql-server \
     certbot python3-certbot-apache \
     fail2ban \
     ufw \
-    unzip curl git \
+    unzip curl git rsync \
     2>&1 | tail -10');
 
 success("System packages installed.");
@@ -365,22 +221,35 @@ success("System packages installed.");
 // ─── Install Composer ───
 
 info("Installing Composer...");
-sshExec($config, 'curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer 2>&1');
+// sshSudo wraps the command in `sudo bash -c '...'`, so the pipe runs entirely
+// under the elevated shell — both curl and the php installer write under root.
+sshSudo($config, 'curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer');
 success("Composer installed.");
 
 // ─── Create directory structure ───
 
 info("Creating directory structure...");
-sshExec($config, 'mkdir -p /var/www/securitydrama && mkdir -p /var/log/securitydrama && mkdir -p /tmp/securitydrama');
-sshExec($config, 'chown -R www-data:www-data /var/log/securitydrama /tmp/securitydrama');
+sshSudo($config, 'mkdir -p /var/www/securitydrama /var/log/securitydrama /tmp/securitydrama');
+sshSudo($config, 'chown -R www-data:www-data /var/log/securitydrama /tmp/securitydrama');
 
 // ─── Upload application code ───
+
+// rsync over ssh runs the remote side as the deploy user. Since the target
+// parent (/var/www/securitydrama) is owned by www-data at this point, we
+// temporarily hand ownership to the deploy user, rsync, then hand it back.
+// This avoids needing `--rsync-path="sudo rsync"` (and the sudoers entries
+// that would require) and works uniformly with NOPASSWD and password sudo.
+info("Preparing upload target...");
+$sshUser = $config['ssh_user'];
+sshSudo($config, "chown {$sshUser}:{$sshUser} /var/www/securitydrama");
 
 info("Uploading application code...");
 $projectDir = dirname(__FILE__);
 $uploaded = rsyncUpload($config, $projectDir, '/var/www/securitydrama');
 if (!$uploaded) {
     error("Failed to upload application code.");
+    // Restore ownership even on failure so we don't leave a security hole.
+    sshSudo($config, "chown -R www-data:www-data /var/www/securitydrama");
     exit(1);
 }
 success("Application code uploaded.");
@@ -388,9 +257,9 @@ success("Application code uploaded.");
 // ─── Set ownership and permissions ───
 
 info("Setting file permissions...");
-sshExec($config, 'chown -R www-data:www-data /var/www/securitydrama');
-sshExec($config, 'find /var/www/securitydrama -type f -exec chmod 644 {} \;');
-sshExec($config, 'find /var/www/securitydrama -type d -exec chmod 755 {} \;');
+sshSudo($config, 'chown -R www-data:www-data /var/www/securitydrama');
+sshSudo($config, 'find /var/www/securitydrama -type f -exec chmod 644 {} \;');
+sshSudo($config, 'find /var/www/securitydrama -type d -exec chmod 755 {} \;');
 
 // ─── Write .env file ───
 
@@ -411,6 +280,9 @@ ANTHROPIC_API_KEY={$config['anthropic_api_key']}
 
 # HeyGen
 HEYGEN_API_KEY={$config['heygen_api_key']}
+
+# Seedance / fal.ai
+FAL_API_KEY={$config['fal_api_key']}
 
 # Missinglettr API
 MISSINGLETTR_API_KEY={$config['missinglettr_api_key']}
@@ -451,39 +323,40 @@ ADMIN_USER={$config['admin_user']}
 ADMIN_PASS={$config['admin_pass']}
 ENV;
 
-// Write .env via SSH (avoids file transfer issues with special chars)
-$escapedEnv = str_replace("'", "'\\''", $envContent);
-sshExec($config, "cat > /var/www/securitydrama/.env << 'ENVEOF'\n{$envContent}\nENVEOF");
-sshExec($config, 'chmod 600 /var/www/securitydrama/.env && chown www-data:www-data /var/www/securitydrama/.env');
+// Atomic privileged write: /tmp stage → sudo install -m 600 -o www-data -g www-data.
+sshWriteFile($config, '/var/www/securitydrama/.env', $envContent, 'www-data', 'www-data', '600');
 success(".env file written.");
 
 // ─── Install Composer dependencies ───
 
 info("Installing Composer dependencies...");
-sshExecStream($config, 'cd /var/www/securitydrama && composer install --no-dev --optimize-autoloader 2>&1 | tail -10');
+// Must run as www-data so Composer's cache/temp goes to www-data's home and
+// vendor/ ends up owned correctly. www-data can read .env (which it owns).
+sshSudoAsStream($config, 'www-data', 'cd /var/www/securitydrama && HOME=/tmp/securitydrama composer install --no-dev --optimize-autoloader 2>&1 | tail -10');
 success("Composer dependencies installed.");
 
 // ─── Configure MySQL ───
 
 info("Configuring MySQL...");
 
-// Secure MySQL installation
-$escapedRootPass = str_replace("'", "'\\''", $config['db_root_pass']);
-$escapedDbPass = str_replace("'", "'\\''", $config['db_pass']);
+$escapedDbPass = str_replace("'", "''", $config['db_pass']);
 $dbName = $config['db_name'];
 $dbUser = $config['db_user'];
 
-sshExec($config, "mysql -u root << 'SQLEOF'
-ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '{$escapedRootPass}';
-CREATE DATABASE IF NOT EXISTS {$dbName} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS '{$dbUser}'@'localhost' IDENTIFIED BY '{$escapedDbPass}';
-GRANT SELECT, INSERT, UPDATE, DELETE ON {$dbName}.* TO '{$dbUser}'@'localhost';
-FLUSH PRIVILEGES;
-SQLEOF");
+// Create the database and application user. On Ubuntu 24.04, fresh-install
+// root MySQL uses auth_socket — requires UID 0 — so we invoke via sudo.
+$createSql = "CREATE DATABASE IF NOT EXISTS `{$dbName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; "
+    . "CREATE USER IF NOT EXISTS '{$dbUser}'@'localhost' IDENTIFIED BY '{$escapedDbPass}'; "
+    . "ALTER USER '{$dbUser}'@'localhost' IDENTIFIED BY '{$escapedDbPass}'; "
+    . "GRANT SELECT, INSERT, UPDATE, DELETE ON `{$dbName}`.* TO '{$dbUser}'@'localhost'; "
+    . "FLUSH PRIVILEGES;";
+sshSudo($config, "mysql -e " . escapeshellarg($createSql));
 
-// MySQL hardening
-sshExec($config, "cat >> /etc/mysql/mysql.conf.d/mysqld.cnf << 'MYCNF'
-
+// MySQL tuning — ship as a drop-in file rather than mutating the default
+// mysqld.cnf. Idempotent across re-runs and safe if Ubuntu later updates
+// the default config.
+$mycnfContent = <<<'MYCNF'
+[mysqld]
 # Security Drama optimizations
 bind-address = 127.0.0.1
 innodb_buffer_pool_size = 256M
@@ -491,27 +364,29 @@ max_connections = 20
 slow_query_log = 1
 long_query_time = 2
 slow_query_log_file = /var/log/mysql/mysql-slow.log
-MYCNF");
+MYCNF;
+sshWriteFile($config, '/etc/mysql/mysql.conf.d/99-securitydrama.cnf', $mycnfContent, 'root', 'root', '644');
 
-sshExec($config, 'systemctl restart mysql');
+sshSudo($config, 'systemctl restart mysql');
 success("MySQL configured.");
 
-// ─── Run migrations (as root user who has CREATE TABLE privileges) ───
+// ─── Run migrations (temporarily grant CREATE/ALTER privileges) ───
 
 info("Running database migrations...");
-// Grant temporary CREATE privilege for migrations
-sshExec($config, "mysql -u root -p'{$escapedRootPass}' -e \"GRANT CREATE, ALTER, INDEX, REFERENCES ON {$dbName}.* TO '{$dbUser}'@'localhost'; FLUSH PRIVILEGES;\"");
+$grantSql = "GRANT CREATE, ALTER, INDEX, REFERENCES ON `{$dbName}`.* TO '{$dbUser}'@'localhost'; FLUSH PRIVILEGES;";
+sshSudo($config, "mysql -e " . escapeshellarg($grantSql));
 
-sshExecStream($config, 'cd /var/www/securitydrama && php cli/migrate.php 2>&1');
+// Run migrations as www-data so it can read .env (chmod 600 www-data:www-data).
+sshSudoAsStream($config, 'www-data', 'cd /var/www/securitydrama && HOME=/tmp/securitydrama php cli/migrate.php 2>&1');
 
-// Revoke CREATE privilege after migrations
-sshExec($config, "mysql -u root -p'{$escapedRootPass}' -e \"REVOKE CREATE, ALTER, INDEX, REFERENCES ON {$dbName}.* FROM '{$dbUser}'@'localhost'; FLUSH PRIVILEGES;\"");
+$revokeSql = "REVOKE CREATE, ALTER, INDEX, REFERENCES ON `{$dbName}`.* FROM '{$dbUser}'@'localhost'; FLUSH PRIVILEGES;";
+sshSudo($config, "mysql -e " . escapeshellarg($revokeSql));
 success("Migrations complete.");
 
 // ─── Seed data ───
 
 info("Seeding feed sources, platform config, and defaults...");
-sshExecStream($config, 'cd /var/www/securitydrama && php cli/seed-feeds.php 2>&1');
+sshSudoAsStream($config, 'www-data', 'cd /var/www/securitydrama && HOME=/tmp/securitydrama php cli/seed-feeds.php 2>&1');
 success("Data seeded.");
 
 // ─── Configure Apache ───
@@ -519,8 +394,8 @@ success("Data seeded.");
 info("Configuring Apache...");
 
 // Enable required modules
-sshExec($config, 'a2enmod rewrite ssl headers php8.3 2>&1');
-sshExec($config, 'a2dissite 000-default 2>&1');
+sshSudo($config, 'a2enmod rewrite ssl headers php8.3 2>&1');
+sshSudo($config, 'a2dissite 000-default 2>&1');
 
 // Write VirtualHost config
 $domain = $config['domain'];
@@ -565,10 +440,10 @@ $vhostConfig = <<<VHOST
 </VirtualHost>
 VHOST;
 
-sshExec($config, "cat > /etc/apache2/sites-available/securitydrama.conf << 'VHOSTEOF'\n{$vhostConfig}\nVHOSTEOF");
+sshWriteFile($config, '/etc/apache2/sites-available/securitydrama.conf', $vhostConfig, 'root', 'root', '644');
 
 // Set Apache MaxRequestWorkers for 1GB RAM
-sshExec($config, "cat > /etc/apache2/mods-available/mpm_prefork.conf << 'MPMEOF'
+$mpmConfig = <<<'MPMCONF'
 <IfModule mpm_prefork_module>
     StartServers           1
     MinSpareServers        1
@@ -576,14 +451,18 @@ sshExec($config, "cat > /etc/apache2/mods-available/mpm_prefork.conf << 'MPMEOF'
     MaxRequestWorkers      3
     MaxConnectionsPerChild 1000
 </IfModule>
-MPMEOF");
+MPMCONF;
+sshWriteFile($config, '/etc/apache2/mods-available/mpm_prefork.conf', $mpmConfig, 'root', 'root', '644');
 
-// Create .htpasswd
-$escapedAdminPass = str_replace("'", "'\\''", $config['admin_pass']);
-sshExec($config, "htpasswd -cb /etc/apache2/.htpasswd '{$config['admin_user']}' '{$escapedAdminPass}'");
+// Create .htpasswd — file lives under /etc/apache2/, so we must sudo.
+// htpasswd -cb writes the file itself; running via sudo ensures correct ownership.
+$escapedAdminPass = escapeshellarg($config['admin_pass']);
+$escapedAdminUser = escapeshellarg($config['admin_user']);
+sshSudo($config, "htpasswd -cb /etc/apache2/.htpasswd {$escapedAdminUser} {$escapedAdminPass}");
+sshSudo($config, 'chmod 640 /etc/apache2/.htpasswd && chown root:www-data /etc/apache2/.htpasswd');
 
 // Enable site (start with HTTP-only temporarily for certbot)
-sshExec($config, 'a2ensite securitydrama 2>&1');
+sshSudo($config, 'a2ensite securitydrama 2>&1');
 
 success("Apache configured.");
 
@@ -604,14 +483,15 @@ if (confirm("DNS is configured and ready for SSL?")) {
     </Directory>
 </VirtualHost>
 TVHOST;
-    sshExec($config, "cat > /etc/apache2/sites-available/securitydrama.conf << 'TVHOSTEOF'\n{$tempVhost}\nTVHOSTEOF");
-    sshExec($config, 'systemctl restart apache2 2>&1');
+    sshWriteFile($config, '/etc/apache2/sites-available/securitydrama.conf', $tempVhost, 'root', 'root', '644');
+    sshSudo($config, 'systemctl restart apache2 2>&1');
 
-    sshExecStream($config, "certbot --apache -d {$domain} --non-interactive --agree-tos --email admin@{$domain} --redirect 2>&1");
+    $escapedDomain = escapeshellarg($domain);
+    sshSudoStream($config, "certbot --apache -d {$escapedDomain} --non-interactive --agree-tos --email admin@{$domain} --redirect 2>&1");
 
     // Now write the full VHost with SSL
-    sshExec($config, "cat > /etc/apache2/sites-available/securitydrama.conf << 'VHOSTEOF'\n{$vhostConfig}\nVHOSTEOF");
-    sshExec($config, 'systemctl restart apache2 2>&1');
+    sshWriteFile($config, '/etc/apache2/sites-available/securitydrama.conf', $vhostConfig, 'root', 'root', '644');
+    sshSudo($config, 'systemctl restart apache2 2>&1');
     success("SSL certificate obtained and configured.");
 } else {
     warn("Skipping SSL. You can run 'certbot --apache -d {$domain}' later.");
@@ -636,8 +516,8 @@ TVHOST;
     CustomLog \${APACHE_LOG_DIR}/securitydrama-access.log combined
 </VirtualHost>
 HVHOST;
-    sshExec($config, "cat > /etc/apache2/sites-available/securitydrama.conf << 'HVHOSTEOF'\n{$httpVhost}\nHVHOSTEOF");
-    sshExec($config, 'systemctl restart apache2 2>&1');
+    sshWriteFile($config, '/etc/apache2/sites-available/securitydrama.conf', $httpVhost, 'root', 'root', '644');
+    sshSudo($config, 'systemctl restart apache2 2>&1');
 }
 
 // ─── PHP Configuration ───
@@ -645,36 +525,39 @@ HVHOST;
 info("Configuring PHP...");
 
 // CLI php.ini overrides
-sshExec($config, "cat > /etc/php/8.3/cli/conf.d/99-securitydrama.ini << 'PHPEOF'
+$cliPhpIni = <<<'PHPCLI'
 memory_limit = 128M
 max_execution_time = 300
-PHPEOF");
+PHPCLI;
+sshWriteFile($config, '/etc/php/8.3/cli/conf.d/99-securitydrama.ini', $cliPhpIni, 'root', 'root', '644');
 
 // Apache php.ini - disable dangerous functions
-sshExec($config, "cat > /etc/php/8.3/apache2/conf.d/99-securitydrama.ini << 'PHPEOF'
+$apachePhpIni = <<<'PHPAPACHE'
 memory_limit = 64M
 disable_functions = exec,passthru,shell_exec,system,proc_open,popen,parse_ini_file,show_source
-PHPEOF");
+PHPAPACHE;
+sshWriteFile($config, '/etc/php/8.3/apache2/conf.d/99-securitydrama.ini', $apachePhpIni, 'root', 'root', '644');
 
-sshExec($config, 'systemctl restart apache2 2>&1');
+sshSudo($config, 'systemctl restart apache2 2>&1');
 success("PHP configured.");
 
 // ─── Firewall (UFW) ───
 
 info("Configuring firewall...");
 $sshPort = $config['new_ssh_port'] ?: $config['ssh_port'];
-sshExec($config, "ufw default deny incoming 2>&1");
-sshExec($config, "ufw default allow outgoing 2>&1");
-sshExec($config, "ufw allow {$sshPort}/tcp 2>&1");
-sshExec($config, "ufw allow 80/tcp 2>&1");
-sshExec($config, "ufw allow 443/tcp 2>&1");
-sshExec($config, "echo 'y' | ufw enable 2>&1");
+sshSudo($config, "ufw default deny incoming 2>&1");
+sshSudo($config, "ufw default allow outgoing 2>&1");
+sshSudo($config, "ufw allow {$sshPort}/tcp 2>&1");
+sshSudo($config, "ufw allow 80/tcp 2>&1");
+sshSudo($config, "ufw allow 443/tcp 2>&1");
+// ufw enable prompts interactively; --force skips the prompt (cleaner than `echo y |`).
+sshSudo($config, "ufw --force enable 2>&1");
 success("Firewall configured.");
 
 // ─── Fail2Ban ───
 
 info("Configuring fail2ban...");
-sshExec($config, "cat > /etc/fail2ban/jail.local << 'F2BEOF'
+$jailLocal = <<<'JAILCONF'
 [sshd]
 enabled = true
 maxretry = 5
@@ -684,19 +567,21 @@ bantime = 3600
 enabled = true
 maxretry = 5
 bantime = 1800
-F2BEOF");
+JAILCONF;
+sshWriteFile($config, '/etc/fail2ban/jail.local', $jailLocal, 'root', 'root', '644');
 
-sshExec($config, 'systemctl enable fail2ban && systemctl restart fail2ban 2>&1');
+sshSudo($config, 'systemctl enable fail2ban && systemctl restart fail2ban 2>&1');
 success("fail2ban configured.");
 
 // ─── SSH Hardening ───
 
 if ($config['new_ssh_port'] && $config['new_ssh_port'] !== $config['ssh_port']) {
     info("Hardening SSH (changing port to {$config['new_ssh_port']})...");
-    sshExec($config, "sed -i 's/^#\\?Port .*/Port {$config['new_ssh_port']}/' /etc/ssh/sshd_config");
-    sshExec($config, "sed -i 's/^#\\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config");
-    sshExec($config, "sed -i 's/^#\\?PermitRootLogin .*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config");
-    sshExec($config, 'systemctl restart sshd 2>&1');
+    $newPort = (int) $config['new_ssh_port'];
+    sshSudo($config, "sed -i 's/^#\\?Port .*/Port {$newPort}/' /etc/ssh/sshd_config");
+    sshSudo($config, "sed -i 's/^#\\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config");
+    sshSudo($config, "sed -i 's/^#\\?PermitRootLogin .*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config");
+    sshSudo($config, 'systemctl restart sshd 2>&1');
     success("SSH hardened. New port: {$config['new_ssh_port']}");
     warn("Update your SSH config to use port {$config['new_ssh_port']} for future connections.");
 }
@@ -736,13 +621,18 @@ $cronContent = <<<'CRON'
 0 3 * * * /usr/bin/php /var/www/securitydrama/cli/purge-logs.php >> /var/log/securitydrama/purge.log 2>&1
 CRON;
 
-sshExec($config, "echo '{$cronContent}' | crontab -u www-data -");
+// Stage cron content to /tmp as the deploy user, then install via sudo.
+// Avoids fragile `echo '...' | sudo crontab -u www-data -` pipe.
+$tmpCronPath = '/tmp/sd-cron-' . bin2hex(random_bytes(6));
+$cronHeredoc = "cat > " . escapeshellarg($tmpCronPath) . " << 'SDCRONEOF'\n{$cronContent}\nSDCRONEOF";
+sshExec($config, $cronHeredoc);
+sshSudo($config, "crontab -u www-data {$tmpCronPath} && rm -f {$tmpCronPath}");
 success("Cron jobs installed.");
 
 // ─── Log rotation ───
 
 info("Setting up log rotation...");
-sshExec($config, "cat > /etc/logrotate.d/securitydrama << 'LREOF'
+$logrotateConfig = <<<'LROTATE'
 /var/log/securitydrama/*.log {
     daily
     missingok
@@ -752,14 +642,15 @@ sshExec($config, "cat > /etc/logrotate.d/securitydrama << 'LREOF'
     notifempty
     create 0644 www-data www-data
 }
-LREOF");
+LROTATE;
+sshWriteFile($config, '/etc/logrotate.d/securitydrama', $logrotateConfig, 'root', 'root', '644');
 success("Log rotation configured.");
 
 // ─── Unattended upgrades ───
 
 info("Enabling unattended security upgrades...");
-sshExec($config, 'apt-get install -y -qq unattended-upgrades 2>&1 | tail -2');
-sshExec($config, "dpkg-reconfigure -f noninteractive unattended-upgrades 2>&1");
+sshSudo($config, 'export DEBIAN_FRONTEND=noninteractive && apt-get install -y -qq unattended-upgrades 2>&1 | tail -2');
+sshSudo($config, "export DEBIAN_FRONTEND=noninteractive && dpkg-reconfigure -f noninteractive unattended-upgrades 2>&1");
 success("Unattended upgrades enabled.");
 
 // ─── Final verification ───

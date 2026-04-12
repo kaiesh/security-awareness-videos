@@ -264,7 +264,7 @@ switch ($action) {
     case 'config':
         $config = \SecurityDrama\Config::getInstance();
 
-        $dbConfig = $db->fetchAll("SELECT `key`, `value` FROM config");
+        $dbConfig = $db->fetchAll("SELECT config_key AS `key`, config_value AS `value` FROM config");
 
         $platformConfig = $db->fetchAll("SELECT * FROM platform_config ORDER BY platform");
 

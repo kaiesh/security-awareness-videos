@@ -8,6 +8,13 @@ AuthName "Security Drama Admin"
 AuthUserFile /etc/apache2/.htpasswd
 Require valid-user
 
+# Health endpoint is deliberately unauthenticated — used by sync.php's smoke
+# test (called locally from the server as curl http://localhost/health.php).
+# It returns no sensitive data, only DB/config reachability and the git SHA.
+<Files "health.php">
+    Require all granted
+</Files>
+
 <FilesMatch "\.(env|json|lock|md|yml|yaml|xml|sh)$">
     Require all denied
 </FilesMatch>

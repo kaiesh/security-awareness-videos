@@ -10,6 +10,7 @@ use SecurityDrama\Database;
 use SecurityDrama\Logger;
 use SecurityDrama\Storage;
 use SecurityDrama\Video\Adapters\HeyGenAdapter;
+use SecurityDrama\Video\Adapters\SeedanceAdapter;
 
 final class VideoOrchestrator
 {
@@ -70,8 +71,9 @@ final class VideoOrchestrator
                 }
 
                 $scriptData = [
-                    'title'     => $script['title'] ?? '',
-                    'narration' => $script['narration'] ?? $script['content'] ?? '',
+                    'title'            => $script['title'] ?? '',
+                    'narration'        => $script['narration'] ?? $script['content'] ?? '',
+                    'visual_direction' => $script['visual_direction'] ?? '',
                 ];
 
                 $providerJobId = $this->generator->submitJob($scriptData, []);
@@ -226,8 +228,9 @@ final class VideoOrchestrator
         $provider = $this->config->get('video_provider', 'heygen');
 
         return match ($provider) {
-            'heygen' => new HeyGenAdapter(),
-            default  => throw new RuntimeException("Unknown video provider: {$provider}"),
+            'heygen'   => new HeyGenAdapter(),
+            'seedance' => new SeedanceAdapter(),
+            default    => throw new RuntimeException("Unknown video provider: {$provider}"),
         };
     }
 }

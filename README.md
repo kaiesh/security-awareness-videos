@@ -7,7 +7,7 @@ Fully automated content pipeline that ingests security vulnerability feeds, gene
 ```
 Feed Sources (53)  ──►  Ingest  ──►  Score & Select  ──►  Script (Claude AI)
                                                               │
-                        Publish  ◄──  Video (HeyGen)  ◄──────┘
+                        Publish  ◄──  Video (HeyGen/Seedance)  ◄─┘
                            │
             ┌──────────────┼──────────────────┐
             ▼              ▼                  ▼
@@ -24,7 +24,7 @@ Feed Sources (53)  ──►  Ingest  ──►  Score & Select  ──►  Scri
 2. **Score** - Rates each item 0-100 based on severity, vibe-coder relevance, recency, source authority, and exploitability signals.
 3. **Select** - Promotes top-scoring items to the content queue. Determines content type (CVE alert, scam drama, security 101, vibe roast, breach story) and target audience.
 4. **Script** - Sends context to Claude API, receives structured JSON scripts with narration, visual cues, on-screen text, hashtags, and platform-specific titles.
-5. **Video** - Submits scripts to HeyGen (pluggable adapter pattern). Polls for completion. Downloads and uploads to DigitalOcean Spaces.
+5. **Video** - Submits scripts to the configured video provider — HeyGen (avatar presenter) or Seedance 2.0 (cinematic AI via fal.ai). Pluggable adapter pattern. Polls for completion. Downloads and uploads to DigitalOcean Spaces.
 6. **Publish** - Posts to YouTube (direct API with resumable upload) and all other platforms via Missinglettr API. Per-platform adapter selection configurable via admin dashboard.
 7. **Reddit Engagement** - Crawls relevant subreddits, matches threads to existing videos, generates contextual comments via Claude, posts with strict anti-spam safeguards.
 
@@ -34,7 +34,7 @@ Feed Sources (53)  ──►  Ingest  ──►  Score & Select  ──►  Scri
 - **Database:** MySQL 8.0
 - **Storage:** DigitalOcean Spaces (S3-compatible)
 - **Dependencies:** Single Composer package (`aws/aws-sdk-php`). All HTTP via built-in curl.
-- **Video:** HeyGen API (pluggable interface for future providers)
+- **Video:** HeyGen API (avatar) or Seedance 2.0 via fal.ai (cinematic) — selectable in admin dashboard
 - **Publishing:** YouTube direct + Missinglettr for 11 other platforms
 - **AI:** Anthropic Claude API for script generation and Reddit comment generation
 
@@ -54,6 +54,7 @@ Feed Sources (53)  ──►  Ingest  ──►  Score & Select  ──►  Scri
 │   ├── reddit-engage.php       # Reddit comment posting
 │   ├── migrate.php             # Database table creation
 │   ├── seed-feeds.php          # Seed feeds, platforms, config
+│   ├── kill-switch.php         # Toggle pipeline_enabled on/off
 │   └── purge-logs.php          # Log cleanup
 ├── config/
 │   ├── feeds.php               # 53 feed source definitions
@@ -81,10 +82,13 @@ Feed Sources (53)  ──►  Ingest  ──►  Score & Select  ──►  Scri
 ├── web/
 │   ├── index.php               # Dashboard router
 │   ├── api.php                 # AJAX API with CSRF + rate limiting
+│   ├── health.php              # Unauthenticated health endpoint (for sync.php)
 │   ├── .htaccess               # Auth, rewrites, file blocking
 │   ├── assets/                 # CSS + JS
 │   └── views/                  # Dashboard pages
 ├── deploy.php                  # Single-script deployment tool
+├── sync.php                    # Incremental code sync tool
+├── deploy-lib.php              # Shared SSH/sudo helpers for deploy + sync
 ├── composer.json
 ├── .env.example
 └── .gitignore
@@ -96,16 +100,40 @@ Feed Sources (53)  ──►  Ingest  ──►  Score & Select  ──►  Scri
 
 - A DigitalOcean droplet (Ubuntu 24.04, 1GB RAM, $6/month)
 - A DigitalOcean Spaces bucket
-- SSH access to the droplet
+- SSH access to the droplet as a **non-root user with sudo privileges** (see below)
 - DNS A record pointing your admin domain to the droplet IP
 - API keys (see below)
+
+#### SSH user setup
+
+`deploy.php` does **not** require or recommend SSH-as-root. Create a dedicated deploy user with sudo on the droplet before running the script:
+
+```bash
+# On a fresh droplet, still logged in as root:
+adduser deploy
+usermod -aG sudo deploy
+mkdir -p /home/deploy/.ssh
+cp ~/.ssh/authorized_keys /home/deploy/.ssh/authorized_keys
+chown -R deploy:deploy /home/deploy/.ssh
+chmod 700 /home/deploy/.ssh && chmod 600 /home/deploy/.ssh/authorized_keys
+
+# Recommended: enable passwordless sudo for the deploy user so the script
+# can escalate non-interactively.
+echo 'deploy ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/deploy
+chmod 440 /etc/sudoers.d/deploy
+```
+
+If you prefer not to enable NOPASSWD, leave `/etc/sudoers.d/deploy` unchanged — the deploy script will prompt for the sudo password once at startup and stream it via `sudo -S` for each privileged call.
+
+The script still supports `ssh_user = root` for legacy setups, but this is discouraged. Either way, all privileged operations (`apt-get`, writes to `/etc`, `systemctl`, `certbot`, `ufw`, `crontab -u www-data`, etc.) are wrapped correctly.
 
 ### Required API Keys
 
 | Service | Required At Launch | Cost |
 |---|---|---|
 | Anthropic (Claude) | Yes | ~$0.10-0.50/script |
-| HeyGen | Yes (for video) | ~$30-100/month |
+| HeyGen | Yes (if using HeyGen provider) | ~$30-100/month |
+| fal.ai (Seedance 2.0) | Yes (if using Seedance provider) | ~$2-3 per 10s video |
 | Missinglettr API | Yes (for multi-platform posting) | Free (500 posts/mo) |
 | DigitalOcean Spaces | Yes | $5/month |
 | YouTube OAuth | Yes (for Shorts) | Free (quota: ~6 uploads/day) |
@@ -141,6 +169,73 @@ The script then automatically:
 - Optionally hardens SSH (custom port, key-only auth)
 - Installs all cron jobs
 - Sets up log rotation
+
+## Syncing code updates
+
+After the initial `deploy.php` run, use `sync.php` to ship ongoing changes. It coordinates with the running pipeline, takes a rollback snapshot, runs migrations/seeds only when they're needed, and smoke-tests the box before re-enabling the pipeline.
+
+### Prerequisites
+
+- `deploy.php` has already been run against the target droplet.
+- Your local git working tree is **clean** (`git status` shows no changes). `sync.php` refuses to run otherwise — commit or stash first.
+- Same SSH/sudo setup as `deploy.php`: a non-root sudoer is strongly recommended, ideally with NOPASSWD.
+
+### Command
+
+```bash
+php sync.php                    # interactive, uses ~/.security-drama/sync.json
+php sync.php --dry-run          # rsync --dry-run only, no writes
+php sync.php --rollback         # interactive picker over retained snapshots
+php sync.php --config=/path.json
+```
+
+On first run, `sync.php` prompts for connection details and offers to save them to `~/.security-drama/sync.json` (chmod 600). The saved file includes `server_ip`, `ssh_port`, `ssh_user`, `ssh_key`, `sudo_pass`, `domain`, `app_dir`, `snapshot_dir`, and `keep_snapshots`.
+
+**About `sudo_pass`**: stored in plaintext at mode 600. This is the same trade-off as storing API keys in `.env`. If you want to avoid it entirely, configure NOPASSWD sudo on the server (recommended — see "SSH user setup" above) and leave the field blank.
+
+### What happens during sync
+
+1. **Preflight** — refuses to run with a dirty git tree; captures the current short SHA.
+2. **Probe** — SSH + sudo reachability, confirms the app directory exists.
+3. **Sentinel lock** — writes `/var/lock/securitydrama-sync.lock` so a second operator can't run a concurrent sync.
+4. **Kill switch** — sets `pipeline_enabled=0` and waits (up to 5 min) for any in-flight pipeline run to finish via its `/tmp/securitydrama_pipeline.lock` file.
+5. **Snapshot** — `cp -al /var/www/securitydrama /var/www/securitydrama-snapshots/<timestamp>-<sha>`. Hardlink tree; near-zero cost, near-zero time, complete rollback point.
+6. **Diff** — hashes the remote `composer.lock`, `cli/migrate.php`, `cli/seed-feeds.php`, and `config/feeds.php` against the local copies to decide which post-sync steps to offer.
+7. **rsync** — pushes code with `--delete` (stale files are removed). `.env`, `vendor/`, `.git/`, `*.log`, and the deploy/sync tooling itself are excluded.
+8. **composer install** — only if `composer.lock` changed.
+9. **Migrations** — always prompt (default answer = yes if `migrate.php` changed, otherwise no).
+10. **Seed** — prompt only if feed config changed.
+11. **VERSION file** — writes the short SHA to `/var/www/securitydrama/VERSION`.
+12. **Smoke tests** — both must pass:
+    - `php cli/pipeline.php --validate-only` (DB + config + env + S3 client)
+    - `curl http://localhost/health.php` (served via Apache, unauthenticated, returns the SHA)
+13. **Kill switch release** — `pipeline_enabled=1`.
+14. **Prune** — deletes all but the most recent `keep_snapshots` snapshots.
+15. **Done** — success banner, sentinel released.
+
+### What happens when something fails after the snapshot is taken
+
+Any error in phases 6–12 triggers an automatic rollback: `rsync -a --delete` from the just-taken snapshot restores the previous tree, the smoke test runs again against the rolled-back code, and the pipeline kill switch is released. You land back on the previous release and see a clear "rolled back" banner.
+
+**Migrations are not rolled back.** Our schema uses `CREATE TABLE IF NOT EXISTS`, so most forward-only migrations are backwards-compatible with older code. If your migration adds a dropped column or renamed table, you must author a reversal migration — that's out of scope for `sync.php`.
+
+### Explicit rollback
+
+```bash
+php sync.php --rollback
+```
+
+Lists retained snapshots (most recent first), prompts for which one to restore, engages the kill switch, rsyncs the snapshot back over `/var/www/securitydrama`, smoke-tests, and releases the kill switch.
+
+### Health endpoint
+
+`https://<your-domain>/health.php` is served without HTTP Basic auth and returns:
+
+```json
+{"status":"ok","db":true,"config":true,"git_sha":"abc1234"}
+```
+
+It exists for the sync tool but you can also curl it from monitoring / uptime checks.
 
 ## Execution
 
@@ -203,6 +298,10 @@ Pages:
 
 ### Updating Application Code
 
+Use `php sync.php` from the project root. See the **Syncing code updates** section above for the full flow. It handles rsync, composer, migrations, seeding, VERSION tracking, smoke tests, and rollback in one command.
+
+If `sync.php` is unavailable for some reason, the raw fallback is:
+
 ```bash
 # From your local machine, in the project directory:
 rsync -avz --exclude=".git" --exclude="vendor" --exclude=".env" \
@@ -210,22 +309,13 @@ rsync -avz --exclude=".git" --exclude="vendor" --exclude=".env" \
   ./ user@server:/var/www/securitydrama/
 
 # On the server, if composer.json changed:
-cd /var/www/securitydrama && composer install --no-dev --optimize-autoloader
+sudo -u www-data bash -c 'cd /var/www/securitydrama && HOME=/tmp/securitydrama composer install --no-dev --optimize-autoloader'
+
+# If migrations changed:
+sudo -u www-data php /var/www/securitydrama/cli/migrate.php
 ```
 
-### Database Migrations
-
-After code updates that add new tables:
-
-```bash
-# Temporarily grant CREATE privileges
-mysql -u root -p -e "GRANT CREATE, ALTER, INDEX, REFERENCES ON securitydrama.* TO 'securitydrama'@'localhost'; FLUSH PRIVILEGES;"
-
-php /var/www/securitydrama/cli/migrate.php
-
-# Revoke after
-mysql -u root -p -e "REVOKE CREATE, ALTER, INDEX, REFERENCES ON securitydrama.* FROM 'securitydrama'@'localhost'; FLUSH PRIVILEGES;"
-```
+Remember to set `pipeline_enabled=0` in the admin dashboard first and back to `1` after, so the cron pipeline doesn't run against half-updated code.
 
 ### Monitoring
 
@@ -269,11 +359,21 @@ mysqldump -u root -p securitydrama > backup_$(date +%Y%m%d).sql
 cp /var/www/securitydrama/.env ~/env_backup_$(date +%Y%m%d)
 ```
 
+### Switching Video Providers
+
+Two providers are available out of the box:
+
+- **HeyGen** (`heygen`) — Avatar-based presenter reads the narration script. Good for authoritative "expert explains" content.
+- **Seedance 2.0** (`seedance`) — Cinematic AI video from text prompts via fal.ai. Produces dynamic multi-shot video with native audio. Good for dramatic, visually engaging content.
+
+Switch between them in the admin dashboard Config page using the "Video Provider" dropdown, or set `video_provider` directly in the database.
+
 ### Adding a New Video Provider
 
 1. Create a new class in `src/Video/Adapters/` implementing `VideoGeneratorInterface`
 2. Add it to the `match` expression in `VideoOrchestrator.php`
-3. Set `video_provider` config to your new adapter's name
+3. Add a `<option>` to the provider dropdown in `web/views/config.php`
+4. Set `video_provider` config to your new adapter's name
 
 ### Migrating a Platform from Missinglettr to Direct API
 

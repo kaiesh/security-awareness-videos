@@ -520,6 +520,15 @@
                 if (el) el.value = cfgMap[key] || '';
             });
 
+            // Seedance settings
+            ['seedance_resolution', 'seedance_duration'].forEach(function (key) {
+                var el = document.getElementById('cfg-' + key);
+                if (el) el.value = cfgMap[key] || '';
+            });
+
+            // Show/hide provider-specific sections
+            toggleProviderSections();
+
             // Platform config
             renderPlatformConfig(data.platform_config);
         });
@@ -590,7 +599,7 @@
 
     window.saveGeneralConfig = function () {
         var data = {};
-        ['daily_video_target', 'min_relevance_score', 'log_retention_days', 'pipeline_enabled'].forEach(function (key) {
+        ['daily_video_target', 'video_provider', 'min_relevance_score', 'log_retention_days', 'pipeline_enabled'].forEach(function (key) {
             var el = document.getElementById('cfg-' + key);
             if (el) data[key] = el.value;
         });
@@ -616,6 +625,35 @@
                 showToast('HeyGen settings saved');
             }
         });
+    };
+
+    window.saveSeedanceConfig = function () {
+        var data = {};
+        ['seedance_resolution', 'seedance_duration'].forEach(function (key) {
+            var el = document.getElementById('cfg-' + key);
+            if (el) data[key] = el.value;
+        });
+
+        fetchApi('config-save', data, 'POST').then(function (resp) {
+            if (resp.success) {
+                showToast('Seedance settings saved');
+            }
+        });
+    };
+
+    window.toggleProviderSections = function () {
+        var provider = document.getElementById('cfg-video_provider');
+        var heygenSection = document.getElementById('config-heygen-form');
+        var seedanceSection = document.getElementById('seedance-settings-section');
+        if (!provider) return;
+
+        var val = provider.value;
+        if (heygenSection) {
+            heygenSection.closest('.bg-gray-800').style.display = val === 'heygen' ? '' : 'none';
+        }
+        if (seedanceSection) {
+            seedanceSection.style.display = val === 'seedance' ? '' : 'none';
+        }
     };
 
     window.savePlatformConfig = function (platform) {

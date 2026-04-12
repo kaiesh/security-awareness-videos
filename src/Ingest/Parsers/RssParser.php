@@ -25,7 +25,7 @@ final class RssParser
     public function parse(array $source): array
     {
         $url = $source['url'];
-        Logger::info("RssParser: fetching {$url}");
+        Logger::info('ingest', "RssParser: fetching {$url}");
 
         $xml = $this->http->get($url);
 

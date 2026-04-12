@@ -43,7 +43,7 @@ final class JsonApiParser
             $responseMap = json_decode($responseMap, true) ?? [];
         }
 
-        Logger::info("JsonApiParser: fetching {$url}");
+        Logger::info('ingest', "JsonApiParser: fetching {$url}");
 
         $body = $this->http->get($url);
         $data = json_decode($body, true);

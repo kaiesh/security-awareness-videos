@@ -39,7 +39,7 @@ final class JsonDownloadParser
             $responseMap = json_decode($responseMap, true) ?? [];
         }
 
-        Logger::info("JsonDownloadParser: downloading {$url}");
+        Logger::info('ingest', "JsonDownloadParser: downloading {$url}");
 
         $body = $this->http->get($url);
         $data = json_decode($body, true);
@@ -80,7 +80,7 @@ final class JsonDownloadParser
         // Save current snapshot for next diff
         $this->saveCurrent($slug, $currentItems);
 
-        Logger::info("JsonDownloadParser: found " . count($newItems) . " new items for {$slug}");
+        Logger::info('ingest', "JsonDownloadParser: found " . count($newItems) . " new items for {$slug}");
 
         return $newItems;
     }

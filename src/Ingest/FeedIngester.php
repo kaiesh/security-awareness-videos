@@ -36,7 +36,7 @@ final class FeedIngester
         $stats = ['sources_processed' => 0, 'items_inserted' => 0, 'errors' => 0];
 
         $sources = $this->getDueSources();
-        Logger::info("FeedIngester: " . count($sources) . " sources due for polling");
+        Logger::info('ingest', "FeedIngester: " . count($sources) . " sources due for polling");
 
         foreach ($sources as $source) {
             try {
@@ -46,11 +46,11 @@ final class FeedIngester
 
                 $this->updateSourceSuccess($source['id'], $inserted);
 
-                Logger::info("FeedIngester: {$source['slug']} - inserted {$inserted} items");
+                Logger::info('ingest', "FeedIngester: {$source['slug']} - inserted {$inserted} items");
             } catch (\Throwable $e) {
                 $stats['errors']++;
                 $this->updateSourceError($source['id'], $e->getMessage());
-                Logger::error("FeedIngester: {$source['slug']} - {$e->getMessage()}");
+                Logger::error('ingest', "FeedIngester: {$source['slug']} - {$e->getMessage()}");
             }
 
             // Free memory between sources
@@ -60,7 +60,7 @@ final class FeedIngester
             }
         }
 
-        Logger::info("FeedIngester: complete - " . json_encode($stats));
+        Logger::info('ingest', "FeedIngester: complete - " . json_encode($stats));
 
         return $stats;
     }

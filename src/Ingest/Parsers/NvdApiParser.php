@@ -37,7 +37,7 @@ final class NvdApiParser
             : (new \DateTimeImmutable('-24 hours'))->format('Y-m-d\TH:i:s.000');
         $endDate = (new \DateTimeImmutable())->format('Y-m-d\TH:i:s.000');
 
-        Logger::info("NvdApiParser: querying {$startDate} to {$endDate}");
+        Logger::info('ingest', "NvdApiParser: querying {$startDate} to {$endDate}");
 
         $items = [];
 
@@ -52,7 +52,7 @@ final class NvdApiParser
         $criticalItems = $this->fetchSeverity($startDate, $endDate, 'CRITICAL');
         $items = array_merge($items, $criticalItems);
 
-        Logger::info("NvdApiParser: fetched " . count($items) . " CVEs");
+        Logger::info('ingest', "NvdApiParser: fetched " . count($items) . " CVEs");
 
         return $items;
     }
@@ -76,13 +76,13 @@ final class NvdApiParser
                 'resultsPerPage' => 100,
             ]);
 
-            Logger::info("NvdApiParser: GET {$url}");
+            Logger::info('ingest', "NvdApiParser: GET {$url}");
 
             $body = $this->http->get($url);
             $data = json_decode($body, true);
 
             if (!is_array($data)) {
-                Logger::error("NvdApiParser: invalid JSON response");
+                Logger::error('ingest', "NvdApiParser: invalid JSON response");
                 break;
             }
 

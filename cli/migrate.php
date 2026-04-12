@@ -65,7 +65,7 @@ $tables = [
             name VARCHAR(100) NOT NULL,
             slug VARCHAR(50) NOT NULL UNIQUE,
             category ENUM('cve','exploit','breach','news','vendor','scam','community') NOT NULL,
-            feed_type ENUM('rss','json_api','json_download','html_scrape') NOT NULL,
+            feed_type ENUM('rss','json_api','json_download','html_scrape','nvd_api') NOT NULL,
             url VARCHAR(500) NOT NULL,
             polling_interval_minutes INT UNSIGNED NOT NULL DEFAULT 360,
             is_active TINYINT(1) NOT NULL DEFAULT 1,
@@ -276,5 +276,31 @@ foreach ($tables as $name => $sql) {
     }
 }
 
-echo "\nMigration complete. Tables: {$created} OK, {$errors} errors.\n";
+// =========================================================================
+// Idempotent in-place schema changes for already-deployed servers.
+// CREATE TABLE IF NOT EXISTS above only handles fresh installs; existing
+// tables need explicit ALTERs. Each entry must be safe to re-run.
+//
+// MySQL appends ENUM values in-place without rewriting the table, so the
+// feed_type ALTER is cheap regardless of whether nvd_api is already there.
+// =========================================================================
+$alterations = [
+    'feed_sources.feed_type += nvd_api'
+        => "ALTER TABLE feed_sources MODIFY COLUMN feed_type "
+         . "ENUM('rss','json_api','json_download','html_scrape','nvd_api') NOT NULL",
+];
+
+$altered = 0;
+foreach ($alterations as $label => $sql) {
+    try {
+        $db->exec($sql);
+        echo "  [ALTER OK] {$label}\n";
+        $altered++;
+    } catch (\PDOException $e) {
+        echo "  [ALTER FAIL] {$label}: {$e->getMessage()}\n";
+        $errors++;
+    }
+}
+
+echo "\nMigration complete. Tables: {$created} OK, Alterations: {$altered} OK, {$errors} errors.\n";
 exit($errors > 0 ? 1 : 0);

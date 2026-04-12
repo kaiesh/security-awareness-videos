@@ -288,6 +288,23 @@ $alterations = [
     'feed_sources.feed_type += nvd_api'
         => "ALTER TABLE feed_sources MODIFY COLUMN feed_type "
          . "ENUM('rss','json_api','json_download','html_scrape','nvd_api') NOT NULL",
+
+    // scripts: per-platform title/description columns consumed by
+    // PlatformFormatter, and raw LLM response for debugging.
+    'scripts.+title_youtube'
+        => "ALTER TABLE scripts ADD COLUMN title_youtube VARCHAR(300) NULL",
+    'scripts.+title_social'
+        => "ALTER TABLE scripts ADD COLUMN title_social VARCHAR(300) NULL",
+    'scripts.+description_youtube'
+        => "ALTER TABLE scripts ADD COLUMN description_youtube TEXT NULL",
+    'scripts.+raw_response'
+        => "ALTER TABLE scripts ADD COLUMN raw_response MEDIUMTEXT NULL",
+
+    // videos: provider-side error text (content_queue.failure_reason
+    // already captures the queue-level message, but we want the raw
+    // provider response on the video row too).
+    'videos.+provider_error'
+        => "ALTER TABLE videos ADD COLUMN provider_error TEXT NULL",
 ];
 
 $altered = 0;
@@ -297,7 +314,16 @@ foreach ($alterations as $label => $sql) {
         echo "  [ALTER OK] {$label}\n";
         $altered++;
     } catch (\PDOException $e) {
-        echo "  [ALTER FAIL] {$label}: {$e->getMessage()}\n";
+        $msg = $e->getMessage();
+        // MySQL < 8.0.29 has no ADD COLUMN IF NOT EXISTS, so re-runs hit
+        // "Duplicate column name" or "Duplicate key name" on already-applied
+        // alterations. Treat those as success, not failure.
+        if (str_contains($msg, 'Duplicate column name')
+            || str_contains($msg, 'Duplicate key name')) {
+            echo "  [ALTER SKIP] {$label} (already applied)\n";
+            continue;
+        }
+        echo "  [ALTER FAIL] {$label}: {$msg}\n";
         $errors++;
     }
 }

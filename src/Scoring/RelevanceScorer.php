@@ -39,7 +39,7 @@ final class RelevanceScorer
 
     private Database $db;
 
-    /** @var array<int, int> Cache of feed_source_id => tier */
+    /** @var array<int, int> Cache of source_id => tier */
     private array $sourceTierCache = [];
 
     public function __construct()

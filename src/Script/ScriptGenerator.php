@@ -25,7 +25,7 @@ final class ScriptGenerator
     {
         $items = $this->db->fetchAll(
             "SELECT cq.*, fi.title, fi.description, fi.severity, fi.external_id,
-                    fi.affected_products, fi.source_url
+                    fi.affected_products, fi.url AS source_url
              FROM content_queue cq
              JOIN feed_items fi ON cq.feed_item_id = fi.id
              WHERE cq.status = 'pending_script'
@@ -92,9 +92,9 @@ final class ScriptGenerator
         // Insert into scripts table
         $this->db->execute(
             "INSERT INTO scripts
-             (content_queue_id, narration, hook_line, on_screen_text, visual_direction,
-              cta, hashtags, title_youtube, title_social, description_youtube,
-              raw_response, prompt_tokens, completion_tokens, model, created_at)
+             (queue_id, narration_text, hook_line, on_screen_text, visual_direction,
+              cta_text, hashtags, title_youtube, title_social, description_youtube,
+              raw_response, llm_prompt_tokens, llm_completion_tokens, llm_model, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
             [
                 $queueId,

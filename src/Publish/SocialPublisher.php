@@ -67,7 +67,7 @@ final class SocialPublisher
                 Logger::error(self::MODULE, "Failed to process queue item {$queueItem['id']}: {$e->getMessage()}");
 
                 $this->db->execute(
-                    "UPDATE content_queue SET status = 'publish_failed', error_message = ?, updated_at = NOW() WHERE id = ?",
+                    "UPDATE content_queue SET status = 'failed', failure_reason = ?, updated_at = NOW() WHERE id = ?",
                     [$e->getMessage(), $queueItem['id']]
                 );
             }
@@ -102,9 +102,11 @@ final class SocialPublisher
         $localPath = $this->downloadVideo($video);
         $video['local_path'] = $localPath;
 
-        // Get enabled platform configs
+        // Get enabled platform configs. Ordering is alphabetical (stable +
+        // deterministic) — platform_config has no priority column, and the
+        // publish order within the non-youtube group is not load-bearing.
         $platformConfigs = $this->db->fetchAll(
-            "SELECT * FROM platform_config WHERE is_enabled = 1 AND adapter != 'disabled' ORDER BY priority ASC"
+            "SELECT * FROM platform_config WHERE is_enabled = 1 AND adapter != 'disabled' ORDER BY platform ASC"
         );
 
         if (empty($platformConfigs)) {
@@ -153,10 +155,11 @@ final class SocialPublisher
 
         Logger::info(self::MODULE, "Publishing to {$platform} via {$adapterName}");
 
-        // Create social_posts record
+        // Create social_posts record. Schema has no script_id (the link is
+        // video → script via videos.script_id), so we don't denormalise it.
         $this->db->execute(
-            "INSERT INTO social_posts (video_id, script_id, platform, adapter, status, created_at) VALUES (?, ?, ?, ?, 'pending', NOW())",
-            [$video['id'], $script['id'], $platform, $adapterName]
+            "INSERT INTO social_posts (video_id, platform, adapter, status, created_at) VALUES (?, ?, ?, 'pending', NOW())",
+            [$video['id'], $platform, $adapterName]
         );
         $postRecordId = $this->db->lastInsertId();
 
@@ -181,14 +184,14 @@ final class SocialPublisher
                 }
 
                 $this->db->execute(
-                    "UPDATE social_posts SET status = 'published', external_post_id = ?, external_post_url = ?, updated_at = NOW() WHERE id = ?",
+                    "UPDATE social_posts SET status = 'posted', platform_post_id = ?, platform_url = ?, posted_at = NOW() WHERE id = ?",
                     [$result['post_id'], $result['post_url'], $postRecordId]
                 );
 
                 Logger::info(self::MODULE, "Published to {$platform}: {$result['post_url']}");
             } else {
                 $this->db->execute(
-                    "UPDATE social_posts SET status = 'failed', error_message = ?, updated_at = NOW() WHERE id = ?",
+                    "UPDATE social_posts SET status = 'failed', failure_reason = ? WHERE id = ?",
                     [$result['error'], $postRecordId]
                 );
 
@@ -196,7 +199,7 @@ final class SocialPublisher
             }
         } catch (\Throwable $e) {
             $this->db->execute(
-                "UPDATE social_posts SET status = 'failed', error_message = ?, updated_at = NOW() WHERE id = ?",
+                "UPDATE social_posts SET status = 'failed', failure_reason = ? WHERE id = ?",
                 [$e->getMessage(), $postRecordId]
             );
 

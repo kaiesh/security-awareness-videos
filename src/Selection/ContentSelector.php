@@ -123,18 +123,16 @@ final class ContentSelector
 
     private function determineTargetAudience(array $item): string
     {
+        // Must return a value from content_queue.target_audience enum:
+        // vibe_coder, smb, general.
         $audienceTags = json_decode($item['audience_tags'] ?? '[]', true) ?: [];
 
         if (in_array('vibe_coder', $audienceTags, true)) {
-            return 'vibe_coders';
+            return 'vibe_coder';
         }
 
-        if (in_array('general_audience', $audienceTags, true)) {
-            return 'general';
-        }
-
-        if (in_array('high_severity', $audienceTags, true)) {
-            return 'tech_professionals';
+        if (in_array('smb', $audienceTags, true)) {
+            return 'smb';
         }
 
         return 'general';

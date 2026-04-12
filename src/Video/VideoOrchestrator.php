@@ -40,7 +40,7 @@ final class VideoOrchestrator
     public function submitPending(): int
     {
         $pending = $this->db->fetchAll(
-            'SELECT id, script_id, topic_id FROM content_queue WHERE status = ?',
+            'SELECT id, script_id FROM content_queue WHERE status = ?',
             ['pending_video']
         );
 
@@ -64,34 +64,34 @@ final class VideoOrchestrator
                         'script_id' => $item['script_id'],
                     ]);
                     $this->db->execute(
-                        'UPDATE content_queue SET status = ?, error_reason = ? WHERE id = ?',
+                        'UPDATE content_queue SET status = ?, failure_reason = ? WHERE id = ?',
                         ['failed', 'Script not found', $item['id']]
                     );
                     continue;
                 }
 
                 $scriptData = [
-                    'title'            => $script['title'] ?? '',
-                    'narration'        => $script['narration'] ?? $script['content'] ?? '',
+                    'title'            => $script['title_youtube'] ?? $script['hook_line'] ?? '',
+                    'narration'        => $script['narration_text'] ?? '',
                     'visual_direction' => $script['visual_direction'] ?? '',
                 ];
 
-                $providerJobId = $this->generator->submitJob($scriptData, []);
+                $providerVideoId = $this->generator->submitJob($scriptData, []);
 
                 Logger::info(self::MODULE, 'Video job submitted', [
-                    'queue_id'        => $item['id'],
-                    'provider'        => $this->generator->getProviderName(),
-                    'provider_job_id' => $providerJobId,
+                    'queue_id'          => $item['id'],
+                    'provider'          => $this->generator->getProviderName(),
+                    'provider_video_id' => $providerVideoId,
                 ]);
 
                 $this->db->execute(
-                    'INSERT INTO videos (queue_id, script_id, provider, provider_job_id, provider_status, created_at)
+                    'INSERT INTO videos (queue_id, script_id, provider, provider_video_id, provider_status, created_at)
                      VALUES (?, ?, ?, ?, ?, NOW())',
                     [
                         $item['id'],
                         $item['script_id'],
                         $this->generator->getProviderName(),
-                        $providerJobId,
+                        $providerVideoId,
                         'pending',
                     ]
                 );
@@ -108,7 +108,7 @@ final class VideoOrchestrator
                     'error'    => $e->getMessage(),
                 ]);
                 $this->db->execute(
-                    'UPDATE content_queue SET status = ?, error_reason = ? WHERE id = ?',
+                    'UPDATE content_queue SET status = ?, failure_reason = ? WHERE id = ?',
                     ['failed', 'Video submission error: ' . $e->getMessage(), $item['id']]
                 );
             }
@@ -142,30 +142,30 @@ final class VideoOrchestrator
             $tempFile = null;
 
             try {
-                $status = $this->generator->checkStatus($video['provider_job_id']);
+                $status = $this->generator->checkStatus($video['provider_video_id']);
 
                 Logger::debug(self::MODULE, 'Polled video status', [
-                    'video_id'        => $video['id'],
-                    'provider_job_id' => $video['provider_job_id'],
-                    'status'          => $status['status'],
+                    'video_id'          => $video['id'],
+                    'provider_video_id' => $video['provider_video_id'],
+                    'status'            => $status['status'],
                 ]);
 
                 if ($status['status'] === 'completed' && $status['video_url'] !== null) {
-                    $tempFile = self::TEMP_DIR . '/' . $video['provider_job_id'] . '.mp4';
+                    $tempFile = self::TEMP_DIR . '/' . $video['provider_video_id'] . '.mp4';
 
                     $this->generator->downloadVideo($status['video_url'], $tempFile);
 
-                    $remotePath = 'videos/' . $video['provider_job_id'] . '.mp4';
+                    $remotePath = 'videos/' . $video['provider_video_id'] . '.mp4';
                     $storageUrl = $this->storage->upload($tempFile, $remotePath);
 
                     $fileSize = filesize($tempFile) ?: null;
 
                     $this->db->execute(
                         'UPDATE videos
-                         SET provider_status = ?, video_url = ?, storage_url = ?,
-                             file_size = ?, completed_at = NOW()
+                         SET provider_status = ?, storage_path = ?, storage_url = ?,
+                             file_size_bytes = ?, completed_at = NOW()
                          WHERE id = ?',
-                        ['completed', $status['video_url'], $storageUrl, $fileSize, $video['id']]
+                        ['completed', $remotePath, $storageUrl, $fileSize, $video['id']]
                     );
 
                     $this->db->execute(
@@ -183,12 +183,12 @@ final class VideoOrchestrator
                     $errorReason = $status['error'] ?? 'Unknown provider error';
 
                     $this->db->execute(
-                        'UPDATE videos SET provider_status = ?, error_reason = ? WHERE id = ?',
+                        'UPDATE videos SET provider_status = ?, provider_error = ? WHERE id = ?',
                         ['failed', $errorReason, $video['id']]
                     );
 
                     $this->db->execute(
-                        'UPDATE content_queue SET status = ?, error_reason = ? WHERE id = ?',
+                        'UPDATE content_queue SET status = ?, failure_reason = ? WHERE id = ?',
                         ['failed', 'Video generation failed: ' . $errorReason, $video['queue_id']]
                     );
 

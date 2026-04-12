@@ -48,7 +48,7 @@ final class ContentSelector
         $candidates = $this->db->fetchAll(
             "SELECT fi.*, fs.category AS source_category
              FROM feed_items fi
-             JOIN feed_sources fs ON fi.feed_source_id = fs.id
+             JOIN feed_sources fs ON fi.source_id = fs.id
              WHERE fi.is_processed = 1
                AND fi.relevance_score >= ?
                AND fi.id NOT IN (SELECT feed_item_id FROM content_queue)

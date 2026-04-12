@@ -52,7 +52,7 @@ final class RelevanceScorer
         $items = $this->db->fetchAll(
             'SELECT fi.*, fs.polling_interval_minutes, fs.category AS source_category
              FROM feed_items fi
-             JOIN feed_sources fs ON fi.feed_source_id = fs.id
+             JOIN feed_sources fs ON fi.source_id = fs.id
              WHERE fi.is_processed = 0
              ORDER BY fi.id ASC'
         );

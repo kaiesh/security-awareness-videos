@@ -78,7 +78,15 @@ final class NvdApiParser
 
             Logger::info('ingest', "NvdApiParser: GET {$url}");
 
-            $body = $this->http->get($url);
+            $response = $this->http->get($url);
+            $status = (int) ($response['status'] ?? 0);
+            $body   = (string) ($response['body'] ?? '');
+
+            if ($status < 200 || $status >= 300) {
+                Logger::error('ingest', "NvdApiParser: HTTP {$status} from {$url}");
+                break;
+            }
+
             $data = json_decode($body, true);
 
             if (!is_array($data)) {

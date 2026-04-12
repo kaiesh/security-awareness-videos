@@ -27,9 +27,14 @@ final class RssParser
         $url = $source['url'];
         Logger::info('ingest', "RssParser: fetching {$url}");
 
-        $xml = $this->http->get($url);
+        $response = $this->http->get($url);
+        $status = (int) ($response['status'] ?? 0);
+        $xml    = (string) ($response['body'] ?? '');
 
-        if ($xml === '' || $xml === false) {
+        if ($status < 200 || $status >= 300) {
+            throw new \RuntimeException("RssParser: HTTP {$status} from {$url}");
+        }
+        if ($xml === '') {
             throw new \RuntimeException("RssParser: empty response from {$url}");
         }
 

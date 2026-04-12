@@ -41,7 +41,14 @@ final class JsonDownloadParser
 
         Logger::info('ingest', "JsonDownloadParser: downloading {$url}");
 
-        $body = $this->http->get($url);
+        $response = $this->http->get($url);
+        $status = (int) ($response['status'] ?? 0);
+        $body   = (string) ($response['body'] ?? '');
+
+        if ($status < 200 || $status >= 300) {
+            throw new \RuntimeException("JsonDownloadParser: HTTP {$status} from {$url}");
+        }
+
         $data = json_decode($body, true);
 
         if (!is_array($data)) {

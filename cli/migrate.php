@@ -23,7 +23,17 @@ if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
     exit(1);
 }
 
-$lockFile = fopen('/tmp/securitydrama_migrate.lock', 'c');
+// /var/lock is root-owned by default and the standard Linux location for
+// system locks. Earlier versions of this script used /tmp, which caused
+// permission issues when the lock file was created by one user (www-data)
+// and reopened by another (root) — and /tmp is also subject to systemd
+// PrivateTmp namespacing on some setups.
+$lockPath = '/var/lock/securitydrama-migrate.lock';
+$lockFile = @fopen($lockPath, 'c');
+if ($lockFile === false) {
+    fwrite(STDERR, "Could not open lock file {$lockPath}\n");
+    exit(1);
+}
 if (!flock($lockFile, LOCK_EX | LOCK_NB)) {
     echo "Another migration process is already running.\n";
     exit(1);

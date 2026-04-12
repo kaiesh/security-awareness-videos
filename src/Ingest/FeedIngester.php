@@ -112,17 +112,17 @@ final class FeedIngester
             try {
                 $this->db->execute(
                     "INSERT IGNORE INTO feed_items
-                        (source_id, title, description, url, cve_id, cvss_score, severity,
+                        (source_id, title, description, url, external_id, cvss_score, severity,
                          affected_products, audience_tags, content_hash, published_at, ingested_at)
                      VALUES
-                        (:source_id, :title, :description, :url, :cve_id, :cvss_score, :severity,
+                        (:source_id, :title, :description, :url, :external_id, :cvss_score, :severity,
                          :affected_products, :audience_tags, :content_hash, :published_at, :ingested_at)",
                     [
                         'source_id'         => $normalised['source_id'],
                         'title'             => $normalised['title'],
                         'description'       => $normalised['description'],
                         'url'               => $normalised['url'],
-                        'cve_id'            => $normalised['cve_id'],
+                        'external_id'       => $normalised['cve_id'],
                         'cvss_score'        => $normalised['cvss_score'],
                         'severity'          => $normalised['severity'],
                         'affected_products' => $normalised['affected_products'],

@@ -190,23 +190,50 @@ final class HeyGenAdapter implements VideoGeneratorInterface
                 throw new RuntimeException("Avatar group {$groupId} returned no looks");
             }
 
-            $active = array_values(array_filter(
+            // HeyGen photo-avatar looks use lowercase statuses like
+            // "completed", "pending", "failed". Only "completed" is
+            // usable with /v2/video/generate — anything else returns
+            // "avatar look not found".
+            $usableStatuses = ['COMPLETED', 'ACTIVE', 'READY', 'TRAINED'];
+            $usable = array_values(array_filter(
                 $looks,
-                static fn(array $look): bool => strtoupper((string) ($look['status'] ?? '')) === 'ACTIVE'
+                static fn(array $look): bool => in_array(
+                    strtoupper((string) ($look['status'] ?? '')),
+                    ['COMPLETED', 'ACTIVE', 'READY', 'TRAINED'],
+                    true
+                )
             ));
-            $pool = !empty($active) ? $active : $looks;
 
-            $picked = $pool[random_int(0, count($pool) - 1)];
+            if (empty($usable)) {
+                // Log every status we saw so the operator can see
+                // whether HeyGen has added a new state we need to
+                // whitelist. Unlike the earlier version we do NOT
+                // fall back to the full (unfiltered) list — picking
+                // a draft/in-training look gets a 404 from generate.
+                $seenStatuses = array_values(array_unique(array_map(
+                    static fn(array $l): string => (string) ($l['status'] ?? ''),
+                    $looks
+                )));
+                throw new RuntimeException(
+                    "Avatar group {$groupId} has no usable looks "
+                    . '(accepted: ' . implode(',', $usableStatuses) . '; '
+                    . 'seen: ' . implode(',', $seenStatuses) . ')'
+                );
+            }
+
+            $picked = $usable[random_int(0, count($usable) - 1)];
             $pickedId = (string) ($picked['id'] ?? '');
             if ($pickedId === '') {
                 throw new RuntimeException('Picked avatar look has no id');
             }
 
             Logger::info(self::MODULE, 'Picked avatar look', [
-                'group_id'    => $groupId,
-                'avatar_id'   => $pickedId,
-                'avatar_name' => $picked['name'] ?? null,
-                'pool_size'   => count($pool),
+                'group_id'      => $groupId,
+                'avatar_id'     => $pickedId,
+                'avatar_name'   => $picked['name'] ?? null,
+                'avatar_status' => $picked['status'] ?? null,
+                'pool_size'     => count($usable),
+                'total_looks'   => count($looks),
             ]);
 
             return $pickedId;
@@ -239,6 +266,23 @@ final class HeyGenAdapter implements VideoGeneratorInterface
         if (!is_array($list)) {
             $list = [];
         }
+
+        // Log a compact summary of every look so the operator can see
+        // which ones the filter accepts/rejects without hitting HeyGen
+        // again.
+        $summary = array_map(
+            static fn(array $l): array => [
+                'id'     => $l['id'] ?? null,
+                'name'   => $l['name'] ?? null,
+                'status' => $l['status'] ?? null,
+            ],
+            $list
+        );
+        Logger::info(self::MODULE, 'Fetched avatar group looks', [
+            'group_id'    => $groupId,
+            'total_looks' => count($list),
+            'looks'       => $summary,
+        ]);
 
         self::$lookCache[$groupId] = $list;
         return $list;

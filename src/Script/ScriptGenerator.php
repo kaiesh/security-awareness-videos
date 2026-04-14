@@ -89,6 +89,14 @@ final class ScriptGenerator
         // Parse structured JSON from Claude's response
         $scriptData = $this->parseScriptJson($response['text']);
 
+        // visual_direction stores the structured segment plan as JSON so the
+        // compositor can read it back. The legacy prose description is kept
+        // under `overall_style` for adapters (Seedance) that still consume it.
+        $visualDirectionJson = json_encode([
+            'segments'      => $scriptData['segments'] ?? [],
+            'overall_style' => $scriptData['visual_direction'] ?? null,
+        ]);
+
         // Insert into scripts table
         $this->db->execute(
             "INSERT INTO scripts
@@ -101,7 +109,7 @@ final class ScriptGenerator
                 $scriptData['narration'] ?? '',
                 $scriptData['hook_line'] ?? '',
                 json_encode($scriptData['on_screen_text'] ?? []),
-                $scriptData['visual_direction'] ?? '',
+                $visualDirectionJson,
                 $scriptData['cta'] ?? '',
                 json_encode($scriptData['hashtags'] ?? []),
                 $scriptData['title_youtube'] ?? '',
@@ -211,11 +219,15 @@ final class ScriptGenerator
         }
 
         // Validate required fields
-        $required = ['narration', 'hook_line', 'on_screen_text', 'visual_direction', 'cta'];
+        $required = ['narration', 'hook_line', 'on_screen_text', 'visual_direction', 'cta', 'segments'];
         foreach ($required as $field) {
             if (!isset($data[$field])) {
                 throw new \RuntimeException("Script JSON missing required field: {$field}");
             }
+        }
+
+        if (!is_array($data['segments']) || count($data['segments']) < 3) {
+            throw new \RuntimeException('Script JSON `segments` must be an array with at least 3 entries');
         }
 
         return $data;

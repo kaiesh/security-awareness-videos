@@ -14,7 +14,7 @@ if (!isset($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-$validPages = ['dashboard', 'queue', 'feeds', 'videos', 'posts', 'config', 'logs', 'reddit'];
+$validPages = ['dashboard', 'queue', 'feeds', 'videos', 'posts', 'config', 'logs', 'reddit', 'music'];
 $page = $_GET['page'] ?? 'dashboard';
 
 if (!in_array($page, $validPages, true)) {

@@ -7,11 +7,16 @@ namespace SecurityDrama\Video\Adapters;
 use RuntimeException;
 use SecurityDrama\Config;
 use SecurityDrama\HttpClient;
+use SecurityDrama\Logger;
 use SecurityDrama\Video\VideoGeneratorInterface;
 
 final class HeyGenAdapter implements VideoGeneratorInterface
 {
     private const API_BASE = 'https://api.heygen.com';
+    private const MODULE   = 'heygen';
+
+    /** @var array<string,array<int,array<string,mixed>>> Cache of group_id => looks */
+    private static array $lookCache = [];
 
     private HttpClient $http;
     private Config $config;
@@ -114,14 +119,15 @@ final class HeyGenAdapter implements VideoGeneratorInterface
 
     private function submitDirectAvatarJob(array $scriptData): string
     {
-        $avatarId = $this->config->get('heygen_avatar_id', '');
         $voiceId = $this->config->get('heygen_voice_id', '');
         $narration = $scriptData['narration'] ?? '';
         $title = $scriptData['title'] ?? 'Security Awareness Video';
 
+        $avatarId = $this->resolveAvatarLook();
+
         if ($avatarId === '' || $voiceId === '') {
             throw new RuntimeException(
-                'HeyGen direct avatar mode requires heygen_avatar_id and heygen_voice_id to be configured'
+                'HeyGen direct avatar mode requires heygen_avatar_id (or heygen_avatar_group_id) and heygen_voice_id to be configured'
             );
         }
 
@@ -161,6 +167,81 @@ final class HeyGenAdapter implements VideoGeneratorInterface
         }
 
         return $videoId;
+    }
+
+    private function resolveAvatarLook(): string
+    {
+        $explicitId = (string) $this->config->get('heygen_avatar_id', '');
+        if ($explicitId !== '') {
+            Logger::debug(self::MODULE, 'Using pinned heygen_avatar_id (rotation skipped)', [
+                'avatar_id' => $explicitId,
+            ]);
+            return $explicitId;
+        }
+
+        $groupId = (string) $this->config->get('heygen_avatar_group_id', '');
+        if ($groupId === '') {
+            return '';
+        }
+
+        try {
+            $looks = $this->fetchGroupLooks($groupId);
+            if (empty($looks)) {
+                throw new RuntimeException("Avatar group {$groupId} returned no looks");
+            }
+
+            $active = array_values(array_filter(
+                $looks,
+                static fn(array $look): bool => strtoupper((string) ($look['status'] ?? '')) === 'ACTIVE'
+            ));
+            $pool = !empty($active) ? $active : $looks;
+
+            $picked = $pool[random_int(0, count($pool) - 1)];
+            $pickedId = (string) ($picked['id'] ?? '');
+            if ($pickedId === '') {
+                throw new RuntimeException('Picked avatar look has no id');
+            }
+
+            Logger::info(self::MODULE, 'Picked avatar look', [
+                'group_id'    => $groupId,
+                'avatar_id'   => $pickedId,
+                'avatar_name' => $picked['name'] ?? null,
+                'pool_size'   => count($pool),
+            ]);
+
+            return $pickedId;
+        } catch (\Throwable $e) {
+            Logger::warning(self::MODULE, 'Avatar look rotation failed', [
+                'group_id' => $groupId,
+                'error'    => $e->getMessage(),
+            ]);
+            return '';
+        }
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function fetchGroupLooks(string $groupId): array
+    {
+        if (isset(self::$lookCache[$groupId])) {
+            return self::$lookCache[$groupId];
+        }
+
+        $response = $this->http->get(
+            self::API_BASE . '/v2/avatar_group/' . urlencode($groupId) . '/avatars',
+            $this->authHeaders()
+        );
+
+        $data = $this->decodeResponse($response);
+
+        $list = $data['data']['avatar_list'] ?? [];
+        if (!is_array($list)) {
+            $list = [];
+        }
+
+        self::$lookCache[$groupId] = $list;
+        return $list;
     }
 
     private function authHeaders(): array

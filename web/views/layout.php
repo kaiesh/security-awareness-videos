@@ -12,6 +12,7 @@ $navItems = [
     'posts'     => ['label' => 'Social Posts',   'icon' => '&#9993;'],
     'config'    => ['label' => 'Config',         'icon' => '&#9881;'],
     'reddit'    => ['label' => 'Reddit',         'icon' => '&#9673;'],
+    'music'     => ['label' => 'Music',          'icon' => '&#9835;'],
     'logs'      => ['label' => 'Logs',           'icon' => '&#9783;'],
 ];
 ?>

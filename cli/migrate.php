@@ -235,6 +235,36 @@ $tables = [
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     SQL,
 
+    'broll_cache' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS broll_cache (
+            query_hash CHAR(40) PRIMARY KEY,
+            query_text VARCHAR(500) NOT NULL,
+            source ENUM('pexels') NOT NULL DEFAULT 'pexels',
+            source_video_id VARCHAR(100) NOT NULL,
+            storage_path VARCHAR(500) NOT NULL COMMENT 'DO Spaces key',
+            duration_seconds DECIMAL(6,2) NOT NULL,
+            width INT UNSIGNED NOT NULL,
+            height INT UNSIGNED NOT NULL,
+            credit_text VARCHAR(300) NOT NULL COMMENT 'Pexels attribution string',
+            fetched_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
+    'background_music' => <<<'SQL'
+        CREATE TABLE IF NOT EXISTS background_music (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            category ENUM('cve_alert','scam_drama','security_101','vibe_roast','breach_story') NOT NULL,
+            name VARCHAR(200) NOT NULL,
+            storage_path VARCHAR(500) NOT NULL COMMENT 'DO Spaces key',
+            duration_seconds DECIMAL(6,2) NULL,
+            volume DECIMAL(3,2) NOT NULL DEFAULT 0.15 COMMENT 'Mix level 0.0-1.0',
+            credit_text VARCHAR(300) NULL,
+            is_active TINYINT(1) NOT NULL DEFAULT 1,
+            uploaded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_category_active (category, is_active)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    SQL,
+
     'reddit_threads' => <<<'SQL'
         CREATE TABLE IF NOT EXISTS reddit_threads (
             id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -305,6 +335,12 @@ $alterations = [
     // provider response on the video row too).
     'videos.+provider_error'
         => "ALTER TABLE videos ADD COLUMN provider_error TEXT NULL",
+
+    // videos: flag indicating whether the published mp4 went through the
+    // b-roll compositor (1) or fell back to the narrator-only path (0).
+    'videos.+composited'
+        => "ALTER TABLE videos ADD COLUMN composited TINYINT(1) NOT NULL DEFAULT 0 "
+         . "COMMENT '1 = published with b-roll compositing, 0 = narrator-only fallback'",
 ];
 
 $altered = 0;

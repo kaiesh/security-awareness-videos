@@ -214,6 +214,7 @@ sshSudoStream($config, 'export DEBIAN_FRONTEND=noninteractive && apt-get update 
     fail2ban \
     ufw \
     unzip curl git rsync \
+    ffmpeg \
     2>&1 | tail -10');
 
 success("System packages installed.");

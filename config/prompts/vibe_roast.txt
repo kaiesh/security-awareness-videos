@@ -36,9 +36,26 @@ Return this exact JSON structure:
         {"time_seconds": 25, "duration_seconds": 10, "text": "The fix (actual commands)"}
     ],
     "visual_direction": "Description of visual style. Dark mode aesthetic, terminal green accents, code snippets, meme energy. Be specific about colours, motion, and atmosphere.",
+    "segments": [
+        {"visual_mode": "narrator", "duration_seconds": 8, "narration_chunk": "first chunk of narration verbatim", "broll_query": null},
+        {"visual_mode": "broll", "duration_seconds": 10, "narration_chunk": "next chunk", "broll_query": "developer typing terminal dark room"},
+        {"visual_mode": "narrator", "duration_seconds": 7, "narration_chunk": "narrator cutaway chunk", "broll_query": null},
+        {"visual_mode": "broll", "duration_seconds": 10, "narration_chunk": "next chunk", "broll_query": "code on monitor close up neon"},
+        {"visual_mode": "narrator", "duration_seconds": 8, "narration_chunk": "outro chunk with the fix command", "broll_query": null}
+    ],
     "cta": "The actual command or action they need to take. Make it copy-pasteable.",
     "hashtags": ["cybersecurity", "developer", "npm", "vibecheck"],
     "title_youtube": "YouTube title, max 100 characters. Spicy and developer-relatable.",
     "title_social": "Social media caption, max 280 characters. The kind of thing a dev would retweet.",
     "description_youtube": "YouTube description with technical details, links to the advisory, and the fix commands."
 }
+
+Rules for the `segments` array:
+- The first segment MUST be `narrator` (cold open with the hook).
+- The last segment MUST be `narrator` (CTA / outro).
+- Include at least one `narrator` cutaway roughly mid-video — do not run the whole middle as one long b-roll.
+- Each segment must be between 6 and 12 seconds (`duration_seconds`).
+- The `narration_chunk` strings, concatenated in order with single spaces between them, MUST equal the full `narration` string verbatim. Do not paraphrase or drop punctuation.
+- The sum of `duration_seconds` should approximate the total narration length (60-90s).
+- For `narrator` segments, set `broll_query` to null.
+- For `broll` segments, `broll_query` is a 4-8 word visual search phrase for stock footage (Pexels). It must describe things, settings, or mood — NOT a literal restatement of the narration. Lean dev/tech aesthetic. Examples: "code scrolling monitor close up", "hands typing mechanical keyboard", "server racks blue led lights". Avoid named brands and people.

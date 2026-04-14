@@ -72,10 +72,10 @@ file_put_contents($rateLimitFile, json_encode($rateData), LOCK_EX);
 
 // --- CSRF validation for state-changing requests ---
 if (in_array($method, ['POST', 'PUT', 'DELETE'], true)) {
-    $csrfHeader = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+    $csrfProvided = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? ($_POST['csrf_token'] ?? '');
     $csrfSession = $_SESSION['csrf_token'] ?? '';
 
-    if ($csrfSession === '' || !hash_equals($csrfSession, $csrfHeader)) {
+    if ($csrfSession === '' || !hash_equals($csrfSession, $csrfProvided)) {
         jsonError('Invalid CSRF token.', 403);
     }
 }
@@ -556,6 +556,176 @@ switch ($action) {
         $db->execute("UPDATE reddit_watch_keywords SET is_active = ? WHERE id = ?", [$newState, $id]);
 
         jsonResponse(['success' => true, 'is_active' => $newState]);
+
+    // ============================================================
+    // Music: upload track
+    // ============================================================
+    case 'music-upload':
+        if (!isset($_FILES['audio']) || !is_array($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) {
+            jsonError('Audio file is required.');
+        }
+
+        $file = $_FILES['audio'];
+        $maxBytes = 20 * 1024 * 1024;
+        if ((int) $file['size'] > $maxBytes) {
+            jsonError('Audio file exceeds 20 MB.');
+        }
+
+        $allowedMimes = [
+            'audio/mpeg'   => 'mp3',
+            'audio/mp3'    => 'mp3',
+            'audio/mp4'    => 'm4a',
+            'audio/x-m4a'  => 'm4a',
+            'audio/wav'    => 'wav',
+            'audio/x-wav'  => 'wav',
+            'audio/wave'   => 'wav',
+            'audio/ogg'    => 'ogg',
+        ];
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $detectedMime = $finfo !== false ? (string) finfo_file($finfo, $file['tmp_name']) : '';
+        if ($finfo !== false) {
+            finfo_close($finfo);
+        }
+        if (!isset($allowedMimes[$detectedMime])) {
+            jsonError('Unsupported audio format: ' . ($detectedMime ?: 'unknown'));
+        }
+        $ext = $allowedMimes[$detectedMime];
+
+        $name = trim((string) ($_POST['name'] ?? ''));
+        $category = (string) ($_POST['category'] ?? '');
+        $volume = (float) ($_POST['volume'] ?? 0.15);
+        $creditText = trim((string) ($_POST['credit_text'] ?? ''));
+
+        if ($name === '' || mb_strlen($name) > 200) {
+            jsonError('Name is required (max 200 chars).');
+        }
+
+        $validCategories = ['cve_alert', 'scam_drama', 'security_101', 'vibe_roast', 'breach_story'];
+        if (!in_array($category, $validCategories, true)) {
+            jsonError('Invalid category.');
+        }
+
+        if ($volume < 0.0 || $volume > 1.0) {
+            jsonError('Volume must be between 0.0 and 1.0.');
+        }
+
+        if (mb_strlen($creditText) > 300) {
+            jsonError('Credit text is too long (max 300 chars).');
+        }
+
+        $uuid = bin2hex(random_bytes(8));
+        $remotePath = 'music/' . $category . '/' . $uuid . '.' . $ext;
+
+        try {
+            \SecurityDrama\Storage::getInstance()->upload(
+                $file['tmp_name'],
+                $remotePath,
+                $detectedMime
+            );
+        } catch (\Throwable $e) {
+            \SecurityDrama\Logger::error('admin', 'Music upload to Spaces failed', [
+                'error' => $e->getMessage(),
+            ]);
+            jsonError('Storage upload failed: ' . $e->getMessage(), 500);
+        }
+
+        $db->execute(
+            "INSERT INTO background_music
+             (category, name, storage_path, volume, credit_text, is_active, uploaded_at)
+             VALUES (?, ?, ?, ?, ?, 1, NOW())",
+            [
+                $category,
+                $name,
+                $remotePath,
+                $volume,
+                $creditText !== '' ? $creditText : null,
+            ]
+        );
+
+        jsonResponse([
+            'success' => true,
+            'id'      => (int) $db->lastInsertId(),
+        ]);
+
+    // ============================================================
+    // Music: toggle active
+    // ============================================================
+    case 'music-toggle':
+        $id = (int) ($_GET['id'] ?? 0);
+        if ($id < 1) {
+            $body = json_decode(file_get_contents('php://input'), true);
+            $id = (int) ($body['id'] ?? 0);
+        }
+        if ($id < 1) {
+            jsonError('Invalid track ID.');
+        }
+
+        $row = $db->fetchOne("SELECT id, is_active FROM background_music WHERE id = ?", [$id]);
+        if ($row === null) {
+            jsonError('Track not found.', 404);
+        }
+
+        $newState = $row['is_active'] ? 0 : 1;
+        $db->execute("UPDATE background_music SET is_active = ? WHERE id = ?", [$newState, $id]);
+
+        jsonResponse(['success' => true, 'is_active' => $newState]);
+
+    // ============================================================
+    // Music: update volume
+    // ============================================================
+    case 'music-update-volume':
+        $body = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($body)) {
+            jsonError('Invalid JSON body.');
+        }
+        $id = (int) ($body['id'] ?? 0);
+        $volume = (float) ($body['volume'] ?? -1);
+
+        if ($id < 1) {
+            jsonError('Invalid track ID.');
+        }
+        if ($volume < 0.0 || $volume > 1.0) {
+            jsonError('Volume must be between 0.0 and 1.0.');
+        }
+
+        $row = $db->fetchOne("SELECT id FROM background_music WHERE id = ?", [$id]);
+        if ($row === null) {
+            jsonError('Track not found.', 404);
+        }
+
+        $db->execute("UPDATE background_music SET volume = ? WHERE id = ?", [$volume, $id]);
+
+        jsonResponse(['success' => true, 'volume' => $volume]);
+
+    // ============================================================
+    // Music: delete
+    // ============================================================
+    case 'music-delete':
+        $body = json_decode(file_get_contents('php://input'), true);
+        $id = is_array($body) ? (int) ($body['id'] ?? 0) : 0;
+
+        if ($id < 1) {
+            jsonError('Invalid track ID.');
+        }
+
+        $row = $db->fetchOne("SELECT id, storage_path FROM background_music WHERE id = ?", [$id]);
+        if ($row === null) {
+            jsonError('Track not found.', 404);
+        }
+
+        try {
+            \SecurityDrama\Storage::getInstance()->delete((string) $row['storage_path']);
+        } catch (\Throwable $e) {
+            \SecurityDrama\Logger::warning('admin', 'Spaces delete failed for music track', [
+                'id'    => $id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        $db->execute("DELETE FROM background_music WHERE id = ?", [$id]);
+
+        jsonResponse(['success' => true]);
 
     // ============================================================
     // Unknown action

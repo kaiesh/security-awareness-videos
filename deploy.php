@@ -544,9 +544,12 @@ max_execution_time = 300
 PHPCLI;
 sshWriteFile($config, '/etc/php/8.3/cli/conf.d/99-securitydrama.ini', $cliPhpIni, 'root', 'root', '644');
 
-// Apache php.ini - disable dangerous functions
+// Apache php.ini - disable dangerous functions, raise upload limits for admin
+// file uploads (background music tracks, future asset uploads).
 $apachePhpIni = <<<'PHPAPACHE'
 memory_limit = 64M
+upload_max_filesize = 25M
+post_max_size = 25M
 disable_functions = exec,passthru,shell_exec,system,proc_open,popen,parse_ini_file,show_source
 PHPAPACHE;
 sshWriteFile($config, '/etc/php/8.3/apache2/conf.d/99-securitydrama.ini', $apachePhpIni, 'root', 'root', '644');

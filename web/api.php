@@ -561,8 +561,33 @@ switch ($action) {
     // Music: upload track
     // ============================================================
     case 'music-upload':
-        if (!isset($_FILES['audio']) || !is_array($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) {
+        // If the POST body blew past post_max_size, PHP silently empties
+        // $_POST and $_FILES. Detect that specifically so the operator
+        // doesn't chase a misleading "Audio file is required" error.
+        if (empty($_POST) && empty($_FILES) && ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+            jsonError(
+                'Upload exceeds PHP post_max_size (' . ini_get('post_max_size') . '). '
+                . 'Raise post_max_size and upload_max_filesize in the Apache PHP config.',
+                413
+            );
+        }
+
+        if (!isset($_FILES['audio']) || !is_array($_FILES['audio'])) {
             jsonError('Audio file is required.');
+        }
+
+        $uploadErr = (int) $_FILES['audio']['error'];
+        if ($uploadErr !== UPLOAD_ERR_OK) {
+            $errMap = [
+                UPLOAD_ERR_INI_SIZE   => 'Audio exceeds upload_max_filesize (' . ini_get('upload_max_filesize') . ')',
+                UPLOAD_ERR_FORM_SIZE  => 'Audio exceeds the form MAX_FILE_SIZE limit',
+                UPLOAD_ERR_PARTIAL    => 'Audio upload was only partially received',
+                UPLOAD_ERR_NO_FILE    => 'No audio file was uploaded',
+                UPLOAD_ERR_NO_TMP_DIR => 'Server missing upload tmp dir',
+                UPLOAD_ERR_CANT_WRITE => 'Server failed to write upload to disk',
+                UPLOAD_ERR_EXTENSION  => 'A PHP extension blocked the upload',
+            ];
+            jsonError($errMap[$uploadErr] ?? ('Upload failed (error code ' . $uploadErr . ')'), 400);
         }
 
         $file = $_FILES['audio'];

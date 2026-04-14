@@ -41,7 +41,7 @@ final class HeyGenAdapter implements VideoGeneratorInterface
             return $this->submitTemplateJob($templateId, $scriptData);
         }
 
-        return $this->submitDirectAvatarJob($scriptData);
+        return $this->submitDirectVideoAgentJob($scriptData);
     }
 
     public function checkStatus(string $jobId): array
@@ -115,6 +115,164 @@ final class HeyGenAdapter implements VideoGeneratorInterface
         }
 
         return $videoId;
+    }
+
+    /**
+     * Submit a job to HeyGen's Video Agent endpoint (/v1/video_agent/generate).
+     *
+     * Unlike submitDirectAvatarJob (which sends narration text straight to a
+     * static talking-head render), the Video Agent takes a free-form prompt
+     * describing the video you want and plans pacing, b-roll cuts, and shot
+     * variety itself. We build the prompt from the narration script plus the
+     * per-segment b-roll hints Claude already emits in scripts.visual_direction.
+     *
+     * HeyGen prompt cap is 10,000 chars. Our typical script runs ~1–2k chars
+     * including segment hints, so there's plenty of headroom.
+     */
+    private function submitDirectVideoAgentJob(array $scriptData): string
+    {
+        $narration = trim((string) ($scriptData['narration'] ?? ''));
+        if ($narration === '') {
+            throw new RuntimeException('HeyGen video agent requires non-empty narration');
+        }
+
+        $avatarId = $this->resolveAvatarLook();
+        if ($avatarId === '') {
+            throw new RuntimeException(
+                'HeyGen video agent mode requires heygen_avatar_id (or heygen_avatar_group_id) to be configured'
+            );
+        }
+
+        $prompt = $this->buildVideoAgentPrompt($scriptData);
+        $durationSec = $this->estimateDurationSeconds($narration);
+
+        $body = [
+            'prompt' => $prompt,
+            'config' => [
+                'avatar_id'    => $avatarId,
+                'duration_sec' => $durationSec,
+                'orientation'  => 'portrait',
+            ],
+        ];
+
+        Logger::info(self::MODULE, 'Submitting HeyGen video agent job', [
+            'avatar_id'    => $avatarId,
+            'duration_sec' => $durationSec,
+            'prompt_chars' => strlen($prompt),
+        ]);
+
+        $response = $this->http->post(
+            self::API_BASE . '/v1/video_agent/generate',
+            $body,
+            $this->authHeaders()
+        );
+
+        $data = $this->decodeResponse($response);
+
+        $videoId = $data['data']['video_id'] ?? null;
+        if ($videoId === null) {
+            throw new RuntimeException('HeyGen video agent generate did not return a video_id');
+        }
+
+        return (string) $videoId;
+    }
+
+    /**
+     * Build the free-form prompt we hand to /v1/video_agent/generate.
+     * Includes the verbatim narration plus structured b-roll direction.
+     */
+    private function buildVideoAgentPrompt(array $scriptData): string
+    {
+        $narration = trim((string) ($scriptData['narration'] ?? ''));
+        $title     = trim((string) ($scriptData['title'] ?? ''));
+        $rawDirection = (string) ($scriptData['visual_direction'] ?? '');
+
+        $segments = [];
+        $overallStyle = '';
+        if ($rawDirection !== '') {
+            $decoded = json_decode($rawDirection, true);
+            if (is_array($decoded)) {
+                $segments = is_array($decoded['segments'] ?? null) ? $decoded['segments'] : [];
+                $overallStyle = trim((string) ($decoded['overall_style'] ?? ''));
+            }
+        }
+
+        $lines = [];
+        $lines[] = 'Create a short vertical (9:16 portrait) security-awareness explainer video for social feeds (TikTok, Instagram Reels, YouTube Shorts).';
+        $lines[] = 'Audience: general consumers and non-technical staff who need to grasp a real cybersecurity risk in under a minute.';
+        $lines[] = 'Tone: punchy, slightly dramatic, educational but entertaining — this is the "Security Drama" brand. Avoid corporate stiffness and generic stock-explainer pacing.';
+        $lines[] = 'Pacing: quick cuts, energy from the first frame, no silent pads.';
+        $lines[] = 'Captions: include burned-in captions — viewers often watch muted.';
+        $lines[] = '';
+
+        if ($title !== '') {
+            $lines[] = 'Title / topic: ' . $title;
+            $lines[] = '';
+        }
+
+        $lines[] = 'Narration — the avatar should speak this script verbatim, in order:';
+        $lines[] = '"""';
+        $lines[] = $narration;
+        $lines[] = '"""';
+        $lines[] = '';
+
+        if ($overallStyle !== '') {
+            $lines[] = 'Overall visual style: ' . $overallStyle;
+            $lines[] = '';
+        }
+
+        if (!empty($segments)) {
+            $lines[] = 'Segment-by-segment visual direction (first and last segments on camera with the narrator; interior segments cut to b-roll that matches the subject of the narration chunk):';
+            foreach ($segments as $i => $seg) {
+                $mode = (string) ($seg['visual_mode'] ?? 'narrator');
+                $dur = (float) ($seg['duration_seconds'] ?? 0);
+                $chunk = $this->truncateForPrompt(trim((string) ($seg['narration_chunk'] ?? '')), 140);
+                $broll = trim((string) ($seg['broll_query'] ?? ''));
+
+                $idx = $i + 1;
+                if ($mode === 'broll' && $broll !== '') {
+                    $lines[] = sprintf(
+                        '%d. [~%ds] B-ROLL — visual subject: %s — narration: "%s"',
+                        $idx,
+                        (int) round($dur),
+                        $broll,
+                        $chunk
+                    );
+                } else {
+                    $lines[] = sprintf(
+                        '%d. [~%ds] NARRATOR on camera — narration: "%s"',
+                        $idx,
+                        (int) round($dur),
+                        $chunk
+                    );
+                }
+            }
+            $lines[] = '';
+        }
+
+        $prompt = implode("\n", $lines);
+
+        if (strlen($prompt) > 9500) {
+            $prompt = substr($prompt, 0, 9500);
+        }
+
+        return $prompt;
+    }
+
+    private function estimateDurationSeconds(string $narration): int
+    {
+        $words = preg_split('/\s+/', trim($narration)) ?: [];
+        $wordCount = count(array_filter($words, static fn(string $w): bool => $w !== ''));
+        $seconds = (int) round($wordCount / 2.5);
+        return max(5, $seconds);
+    }
+
+    private function truncateForPrompt(string $text, int $maxLen): string
+    {
+        if (strlen($text) <= $maxLen) {
+            return $text;
+        }
+        return substr($text, 0, $maxLen - 3) . '...';
     }
 
     private function submitDirectAvatarJob(array $scriptData): string

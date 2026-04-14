@@ -166,7 +166,7 @@ final class VideoOrchestrator
 
                     $this->generator->downloadVideo($status['video_url'], $tempFile);
 
-                    [$uploadSource, $composited, $composedTempFile] = $this->composeIfPossible($video, $tempFile);
+                    [$uploadSource, $composited, $composedTempFile] = $this->addBackingTrackIfPossible($video, $tempFile);
 
                     $remotePath = 'videos/' . $video['provider_video_id'] . '.mp4';
                     $storageUrl = $this->storage->upload($uploadSource, $remotePath);
@@ -253,53 +253,153 @@ final class VideoOrchestrator
     }
 
     /**
-     * Try to composite the narrator mp4 with b-roll + background music.
-     * Returns [uploadSource, composited (0|1), composedTempFile|null].
-     * On any failure, soft-falls back to the narrator-only file.
+     * Remix the background music on already-completed, already-uploaded
+     * videos. Downloads the current mp4 from Spaces, picks a fresh track
+     * for the queue item's content_type, runs the music mix, re-uploads
+     * to the same storage path, and updates the DB row.
+     *
+     * @param int|null $videoId  Specific videos.id to remix, or null to
+     *                           remix every completed video.
+     * @param bool     $force    If false, skip videos that already have
+     *                           composited = 1.
+     * @return int Number of videos successfully remixed.
+     */
+    public function remixMusic(?int $videoId = null, bool $force = false): int
+    {
+        $where = "v.provider_status = 'completed' AND v.storage_path IS NOT NULL";
+        $params = [];
+
+        if ($videoId !== null) {
+            $where .= ' AND v.id = ?';
+            $params[] = $videoId;
+        } elseif (!$force) {
+            $where .= ' AND v.composited = 0';
+        }
+
+        $videos = $this->db->fetchAll(
+            "SELECT v.id, v.provider_video_id, v.storage_path, v.composited,
+                    cq.id AS queue_id, cq.content_type,
+                    s.id AS script_row_id
+             FROM videos v
+             JOIN content_queue cq ON cq.id = v.queue_id
+             LEFT JOIN scripts s ON s.id = v.script_id
+             WHERE {$where}
+             ORDER BY v.id",
+            $params
+        );
+
+        if (empty($videos)) {
+            Logger::info(self::MODULE, 'Remix: no matching videos', [
+                'video_id' => $videoId,
+                'force'    => $force,
+            ]);
+            return 0;
+        }
+
+        $remixed = 0;
+
+        foreach ($videos as $video) {
+            if ((int) $video['composited'] === 1 && !$force && $videoId === null) {
+                continue;
+            }
+
+            $sourceTemp = self::TEMP_DIR . '/remix_src_' . $video['provider_video_id'] . '.mp4';
+            $mixedTemp  = self::TEMP_DIR . '/remix_out_' . $video['provider_video_id'] . '.mp4';
+            $music      = null;
+
+            try {
+                $music = $this->musicPicker->pickForCategory((string) $video['content_type']);
+                if ($music === null) {
+                    Logger::warning(self::MODULE, 'Remix: no active music for category', [
+                        'video_id'     => $video['id'],
+                        'content_type' => $video['content_type'],
+                    ]);
+                    continue;
+                }
+
+                $this->storage->download((string) $video['storage_path'], $sourceTemp);
+                if (!file_exists($sourceTemp)) {
+                    throw new \RuntimeException("Failed to download {$video['storage_path']} from storage");
+                }
+
+                $this->compositor->addBackingTrack($sourceTemp, $music, $mixedTemp);
+
+                $storageUrl = $this->storage->upload($mixedTemp, (string) $video['storage_path']);
+                $fileSize = filesize($mixedTemp) ?: null;
+
+                $this->db->execute(
+                    'UPDATE videos
+                     SET composited = 1, storage_url = ?, file_size_bytes = ?
+                     WHERE id = ?',
+                    [$storageUrl, $fileSize, $video['id']]
+                );
+
+                $this->appendMusicCredit((int) $video['script_row_id'], $music);
+
+                Logger::info(self::MODULE, 'Remix complete', [
+                    'video_id'    => $video['id'],
+                    'storage_url' => $storageUrl,
+                    'music'       => $music['name'] ?? null,
+                ]);
+
+                $remixed++;
+            } catch (\Throwable $e) {
+                Logger::error(self::MODULE, 'Remix failed', [
+                    'video_id' => $video['id'],
+                    'error'    => $e->getMessage(),
+                ]);
+            } finally {
+                foreach ([$sourceTemp, $mixedTemp] as $tmp) {
+                    if (file_exists($tmp)) {
+                        @unlink($tmp);
+                    }
+                }
+                if ($music !== null && isset($music['local_path']) && file_exists($music['local_path'])) {
+                    @unlink($music['local_path']);
+                }
+            }
+        }
+
+        Logger::info(self::MODULE, "Remix pass complete: {$remixed} video(s) remixed");
+        return $remixed;
+    }
+
+    /**
+     * Mix a background music track under the provider's finished mp4.
+     * The Video Agent (HeyGen) already produces a cut-together video, so
+     * we don't do our own b-roll compositing — we just lay a quiet music
+     * bed under the narrator audio and re-upload. Returns
+     * [uploadSource, composited (0|1), composedTempFile|null].
+     * On any failure, soft-falls back to the source file.
      *
      * @return array{0:string,1:int,2:?string}
      */
-    private function composeIfPossible(array $video, string $narratorTempFile): array
+    private function addBackingTrackIfPossible(array $video, string $sourceMp4): array
     {
-        $rawDirection = $video['script_visual_direction'] ?? null;
-        if ($rawDirection === null || $rawDirection === '') {
-            return [$narratorTempFile, 0, null];
-        }
-
-        $decoded  = json_decode((string) $rawDirection, true);
-        $segments = is_array($decoded) ? ($decoded['segments'] ?? []) : [];
-
-        if (!is_array($segments) || empty($segments)) {
-            return [$narratorTempFile, 0, null];
-        }
-
-        $brollAssets = [];
         $music = null;
-        $composeOut = self::TEMP_DIR . '/composed_' . $video['provider_video_id'] . '.mp4';
+        $mixedOut = self::TEMP_DIR . '/mixed_' . $video['provider_video_id'] . '.mp4';
 
         try {
-            $brollAssets = $this->brollFetcher->fetchForSegments($segments);
             $music = $this->musicPicker->pickForCategory((string) $video['content_type']);
-            $this->compositor->compose($narratorTempFile, $segments, $brollAssets, $music, $composeOut);
+            if ($music === null) {
+                return [$sourceMp4, 0, null];
+            }
 
-            $this->appendCredits((int) $video['script_row_id'], $brollAssets, $music);
+            $this->compositor->addBackingTrack($sourceMp4, $music, $mixedOut);
 
-            return [$composeOut, 1, $composeOut];
+            $this->appendMusicCredit((int) $video['script_row_id'], $music);
+
+            return [$mixedOut, 1, $mixedOut];
         } catch (\Throwable $e) {
-            Logger::warning(self::MODULE, 'Compose failed, falling back to narrator-only', [
+            Logger::warning(self::MODULE, 'Backing track mix failed, falling back to source', [
                 'video_id' => $video['id'],
                 'error'    => $e->getMessage(),
             ]);
-            if (file_exists($composeOut)) {
-                @unlink($composeOut);
+            if (file_exists($mixedOut)) {
+                @unlink($mixedOut);
             }
-            return [$narratorTempFile, 0, null];
+            return [$sourceMp4, 0, null];
         } finally {
-            foreach ($brollAssets as $p) {
-                if (is_string($p) && file_exists($p)) {
-                    @unlink($p);
-                }
-            }
             if ($music !== null && isset($music['local_path']) && file_exists($music['local_path'])) {
                 @unlink($music['local_path']);
             }
@@ -307,46 +407,12 @@ final class VideoOrchestrator
     }
 
     /**
-     * Append b-roll and music credits to the script's youtube description.
-     * Pexels TOS requires attribution for any video we publish; the music
-     * credit is only included when the track row provides one.
-     *
-     * @param array<int,string> $brollAssets segment_index => local_path (only used
-     *                                       to size the lookup; the canonical credit
-     *                                       text comes from the broll_cache row)
+     * Append a music attribution line to the script's YouTube description.
+     * No-op when the track has no credit_text set.
      */
-    private function appendCredits(int $scriptId, array $brollAssets, ?array $music): void
+    private function appendMusicCredit(int $scriptId, array $music): void
     {
-        if ($scriptId <= 0) {
-            return;
-        }
-
-        $creditLines = [];
-
-        foreach ($brollAssets as $localPath) {
-            // Local filename is "broll_<sha1>.mp4" — recover the hash for lookup.
-            $base = basename((string) $localPath, '.mp4');
-            $hash = str_starts_with($base, 'broll_') ? substr($base, 6) : '';
-            if ($hash === '') {
-                continue;
-            }
-            $row = $this->db->fetchOne(
-                'SELECT credit_text FROM broll_cache WHERE query_hash = ?',
-                [$hash]
-            );
-            if ($row !== null && !empty($row['credit_text'])) {
-                $creditLines[] = (string) $row['credit_text'];
-            }
-        }
-
-        $creditLines = array_values(array_unique($creditLines));
-
-        $musicLine = null;
-        if ($music !== null && !empty($music['credit_text'])) {
-            $musicLine = 'Music: ' . $music['credit_text'];
-        }
-
-        if (empty($creditLines) && $musicLine === null) {
+        if ($scriptId <= 0 || empty($music['credit_text'])) {
             return;
         }
 
@@ -359,13 +425,7 @@ final class VideoOrchestrator
         }
 
         $body = (string) ($script['description_youtube'] ?? '');
-        $block = "\n\n---\n";
-        if (!empty($creditLines)) {
-            $block .= "Footage credits:\n" . implode("\n", $creditLines) . "\n";
-        }
-        if ($musicLine !== null) {
-            $block .= $musicLine . "\n";
-        }
+        $block = "\n\n---\nMusic: " . $music['credit_text'] . "\n";
 
         $this->db->execute(
             'UPDATE scripts SET description_youtube = ? WHERE id = ?',

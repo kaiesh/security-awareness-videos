@@ -178,22 +178,56 @@ final class Compositor
 
     private function mixMusic(string $roughPath, array $music, string $outputPath): void
     {
+        $this->addBackingTrack($roughPath, $music, $outputPath);
+    }
+
+    /**
+     * Mix a background music track under an arbitrary finished mp4.
+     *
+     * Stream-copies the video (no quality loss) and only re-encodes audio.
+     * The narrator audio passes through at unity — `normalize=0` stops
+     * amix from halving both inputs when there are two sources — and the
+     * music is attenuated to the per-track volume. `-stream_loop -1` loops
+     * music that's shorter than the video and `-shortest` clamps the output
+     * length to the narrator side so trailing music is trimmed.
+     *
+     * @param array{local_path:string,volume:float,name?:string} $music
+     */
+    public function addBackingTrack(string $inputMp4, array $music, string $outputPath): void
+    {
+        if (!file_exists($inputMp4)) {
+            throw new RuntimeException("Input mp4 not found for backing track: {$inputMp4}");
+        }
+
         $volume = max(0.0, min(1.0, (float) ($music['volume'] ?? 0.15)));
-        $musicPath = (string) $music['local_path'];
+        $musicPath = (string) ($music['local_path'] ?? '');
+        if ($musicPath === '' || !file_exists($musicPath)) {
+            throw new RuntimeException("Music track file missing: {$musicPath}");
+        }
 
         $this->runFfmpeg([
             '-y',
-            '-i', $roughPath,
+            '-i', $inputMp4,
             '-stream_loop', '-1',
             '-i', $musicPath,
             '-filter_complex',
-                sprintf('[1:a]volume=%.3f[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0[aout]', $volume),
+                sprintf(
+                    '[1:a]volume=%.3f[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]',
+                    $volume
+                ),
             '-map', '0:v',
             '-map', '[aout]',
             '-c:v', 'copy',
             '-c:a', 'aac',
             '-shortest',
             $outputPath,
+        ]);
+
+        Logger::info(self::MODULE, 'Backing track mixed', [
+            'input'  => $inputMp4,
+            'output' => $outputPath,
+            'music'  => $music['name'] ?? null,
+            'volume' => $volume,
         ]);
     }
 
